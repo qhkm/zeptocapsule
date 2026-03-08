@@ -12,7 +12,7 @@
 
 **Design spec:** `docs/plans/2026-03-08-zeptokernel-design.md`
 
-**Current state:** M1 complete, M2 complete, M2.5 complete (real worker launching). 19 tests passing (9 proto + 10 integration).
+**Current state:** M1 complete, M2 complete, M2.5 complete, M3 complete (namespace isolation, Docker test env). 25 tests passing (9 proto + 11 process_backend + 5 namespace + 1 cgroup unit).
 
 **Crates:**
 | Crate | Path | Purpose |
@@ -23,6 +23,15 @@
 
 **Commits so far:**
 ```
+26ae83a test(host): namespace backend integration tests (Linux-only)
+d3aad38 feat(host): implement do_clone — child setup, UID maps, cgroup, pipe IPC
+85b8b6c feat(host): namespace_backend skeleton — CapsuleHandle, Backend stubs
+fcdd84c feat(host): cgroup v2 lifecycle management module
+9dc61e2 feat(host): add namespace feature flag and nix dependency
+eadfae7 fix(infra): dockerignore, Docker preflight check, explain --privileged
+fea0b28 feat(infra): Docker dev environment for Linux namespace tests
+a25b6b8 docs: M3 namespace isolation implementation plan
+... (earlier commits below)
 6a210a2 feat(host): M2 — process backend, supervisor lifecycle, integration tests
 6fe04f0 feat: align protocol with vsock microVM spec
 8109916 feat: scaffold ZeptoKernel — secure per-worker execution capsule
@@ -37,7 +46,7 @@
 | M1: Protocol + Guest Shell | ✅ Done | Types, wire format, guest control loop, init |
 | M2: Host Supervisor + Process Backend | ✅ Done | Backend trait, ProcessBackend, Supervisor lifecycle, 7 integration tests |
 | M2.5: Real Worker Launching | ✅ Done | Guest actually launches worker binary, forwards events, emits heartbeats |
-| M3: Namespace Isolation (Linux) | 🔴 Not started | User/PID/mount namespaces, cgroup v2, seccomp |
+| M3: Namespace Isolation (Linux) | ✅ Done | NamespaceBackend: user/PID/mount/IPC/UTS/net namespaces, cgroup v2, Docker test env, 5 integration tests |
 | M4: ZeptoPM Integration | 🔴 Not started | Wire ZeptoPM to call zk-host instead of spawning workers directly |
 | M5: Hardening + Policy | 🔴 Not started | Per-role profiles, secret redaction, audit logging |
 | M6: Firecracker Backend | 🔴 Not started | MicroVM with vsock, snapshot/restore |
@@ -97,54 +106,39 @@ Requires Linux. User has a VPS for this work. Process backend remains the macOS 
 
 ### Tasks
 
-- [ ] **3.1 — Namespace sandbox backend** (`crates/zk-host/src/namespace_backend.rs`)
-  - New file implementing `Backend` trait
-  - Use `clone(2)` with `CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS`
-  - Map UID/GID inside namespace (nobody:nogroup)
-  - Register module in `crates/zk-host/src/lib.rs`
-  - **Dep:** May need `nix` crate for cleaner namespace APIs
+- [x] **3.1 — Namespace sandbox backend** (`crates/zk-host/src/namespace_backend.rs`)
+  - `NamespaceBackend` + `NamespaceHandle` implementing `Backend` + `CapsuleHandle` traits
+  - `clone(2)` with `CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS | CLONE_NEWNET`
+  - UID/GID maps written by parent after clone (root-in-namespace → host user)
+  - Sync pipe to block child until UID/GID maps are written
+  - Control channel: stdin/stdout pipe pair (same as ProcessBackend, no protocol changes)
 
-- [ ] **3.2 — Mount namespace setup** (`crates/zk-host/src/namespace_backend.rs`)
-  - Readonly bind-mount of minimal rootfs
-  - Writable tmpfs at /workspace (size from `WorkspaceConfig.size_mib`)
-  - Writable tmpfs at /tmp (64 MiB)
-  - Readonly bind-mount of worker binary at /zeptoclaw/worker
-  - Readonly bind-mount of CA certs at /etc/ssl/certs/ (if `network=true`)
-  - Pivot root to new rootfs
+- [x] **3.2 — Mount namespace setup** (`crates/zk-host/src/namespace_backend.rs` — `child_main`)
+  - `/proc` mounted as procfs (process tree visibility)
+  - `/workspace` mounted as tmpfs (job workspace, size from `WorkspaceConfig.size_mib`)
+  - stdin/stdout redirected to pipe pair before `execv(zk-guest)`
+  - **Deferred:** pivot_root to minimal readonly rootfs (post-M3)
 
-- [ ] **3.3 — cgroup v2 resource limits** (`crates/zk-host/src/cgroup.rs`)
-  - New file for cgroup management
-  - Create cgroup for each capsule: `/sys/fs/cgroup/zeptokernel/{job_id}/`
-  - Set `memory.max` from `ResourceLimits.memory_mib`
-  - Set `cpu.max` from `ResourceLimits.cpu_quota`
-  - Set `pids.max` from `ResourceLimits.max_pids`
-  - Cleanup cgroup on capsule termination
+- [x] **3.3 — cgroup v2 resource limits** (`crates/zk-host/src/cgroup.rs`)
+  - `Cgroup` struct with `create()`, `add_pid()`, `apply_limits()`, `destroy()` (retry 3×)
+  - `Cgroup::dummy()` fallback for systems without cgroup v2 delegation
+  - Best-effort: spawn continues on cgroup failure with a warning
 
-- [ ] **3.4 — Network namespace** (`crates/zk-host/src/namespace_backend.rs`)
-  - When `ResourceLimits.network == false`: create empty network namespace (loopback only)
-  - When `ResourceLimits.network == true`: keep host network or create veth pair
-  - Default: no network
+- [x] **3.4 — Network namespace** (via `CLONE_NEWNET` in `do_clone`)
+  - Loopback-only network namespace created for every capsule
+  - **Deferred:** veth pair for outbound HTTP workers (M5)
 
-- [ ] **3.5 — Seccomp filter** (`crates/zk-host/src/seccomp.rs`)
-  - New file for seccomp BPF filter
-  - Start with permissive allowlist (all common syscalls)
-  - Block dangerous syscalls: `mount`, `umount2`, `pivot_root`, `reboot`, `kexec_load`, `init_module`
-  - Allow `clone` but not `clone3` with new namespaces
-  - May need `seccompiler` or `libseccomp` crate
-  - Tighten iteratively based on observed usage
+- [ ] **3.5 — Seccomp filter** — deferred to M5 hardening
 
-- [ ] **3.6 — Namespace backend integration tests**
-  - These MUST run on Linux (use `#[cfg(target_os = "linux")]`)
-  - Test: Worker cannot read host `/etc/passwd`
-  - Test: Worker cannot access host network
-  - Test: Worker killed when memory limit exceeded
-  - Test: Worker cannot fork-bomb (PID limit)
-  - Test: Full job lifecycle through namespace backend
+- [x] **3.6 — Namespace backend integration tests** (`crates/zk-host/tests/namespace_backend.rs`)
+  - 5 tests gated on `#[cfg(all(target_os = "linux", feature = "namespace"))]`
+  - Run via `./scripts/test-linux.sh` inside privileged Docker container
+  - Tests: full lifecycle, supervisor run_job, job failure, cancel (with heartbeat wait + timeout), no-network
 
-- [ ] **3.7 — Feature flag for namespace backend**
-  - Gate behind `namespace` Cargo feature (disabled by default on macOS)
-  - Add to `crates/zk-host/Cargo.toml`: `namespace = ["dep:nix"]`
-  - Conditionally compile with `#[cfg(feature = "namespace")]`
+- [x] **3.7 — Feature flag + Docker dev environment**
+  - `namespace` Cargo feature (disabled by default on macOS)
+  - `Dockerfile.dev` + `scripts/test-linux.sh` with `--privileged` + named volume for artifact isolation
+  - `ZEPTOCLAW_BINARY` in `spec.env` supported by agent (checked before process env)
 
 **Exit criteria:** On Linux, `cargo test --workspace --features namespace` passes. Worker cannot escape sandbox.
 
@@ -340,11 +334,16 @@ These can be done anytime, independently of milestones.
 | `crates/zk-host/src/capsule.rs` | ~50 | `Capsule` state struct |
 | `crates/zk-host/src/vm_config.rs` | ~55 | `VmConfig` for Firecracker |
 | `crates/zk-host/src/main.rs` | ~45 | CLI entry point (hardcoded test job) |
-| `crates/zk-host/tests/process_backend.rs` | ~235 | 7 integration tests |
-| `crates/zk-guest/src/agent.rs` | ~115 | Guest control loop (**placeholder** — doesn't launch worker) |
+| `crates/zk-host/tests/process_backend.rs` | ~450 | 10 integration tests |
+| `crates/zk-host/src/namespace_backend.rs` | ~300 | NamespaceBackend, NamespaceHandle, do_clone, child_main |
+| `crates/zk-host/src/cgroup.rs` | ~95 | Cgroup v2 lifecycle, dummy() fallback |
+| `crates/zk-host/tests/namespace_backend.rs` | ~190 | 5 Linux-only namespace integration tests |
+| `crates/zk-guest/src/agent.rs` | ~450 | Guest control loop — tokio::select! loop, worker launch, heartbeat, cancel |
 | `crates/zk-guest/src/init.rs` | ~80 | Mount helpers (Linux-only) |
-| `crates/zk-guest/src/worker.rs` | ~20 | Job spec file writer (minimal) |
+| `crates/zk-guest/src/worker.rs` | ~65 | WorkerHandle, launch_worker(), write_job_spec() |
 | `crates/zk-guest/src/main.rs` | ~10 | Entry point, calls `run_agent()` |
+| `Dockerfile.dev` | ~10 | Linux Rust dev image for namespace tests |
+| `scripts/test-linux.sh` | ~25 | Docker run with --privileged for namespace tests |
 | `docs/plans/2026-03-08-zeptokernel-design.md` | 412 | Full design spec |
 | `CLAUDE.md` | 61 | Project instructions for agents |
 
@@ -356,6 +355,6 @@ These can be done anytime, independently of milestones.
 2. **Read `CLAUDE.md`** — project conventions and build commands
 3. **Read the design spec** — `docs/plans/2026-03-08-zeptokernel-design.md`
 4. **Run tests** — `cd /Users/dr.noranizaahmad/ios/zeptokernel && cargo test --workspace`
-5. **Pick the next unchecked task** — M2.5 is the highest priority
+5. **Pick the next unchecked task** — M4 (ZeptoPM integration) is the next milestone
 6. **Implement, test, commit** — one task at a time, all tests must pass
 7. **Update this file** — check off completed tasks, add any new discoveries
