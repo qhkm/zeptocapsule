@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::net::UnixStream;
 
 use crate::backend::{KernelError, KernelResult};
@@ -22,37 +22,59 @@ pub fn is_connect_ok(line: &str) -> bool {
 }
 
 pub async fn connect(socket_path: &Path, port: u32) -> KernelResult<UnixStream> {
-    let stream = UnixStream::connect(socket_path)
-        .await
-        .map_err(|e| {
-            KernelError::Transport(format!(
-                "vsock connect {}: {e}",
-                socket_path.display()
-            ))
-        })?;
+    // Retry CONNECT until the guest has bound to the port.
+    // The guest zk-init may still be booting when the host tries to connect.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match try_connect(socket_path, port).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(e);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+        }
+    }
+}
 
-    let (reader, mut writer) = tokio::io::split(stream);
+async fn try_connect(socket_path: &Path, port: u32) -> KernelResult<UnixStream> {
+    use tokio::io::AsyncReadExt;
+
+    let mut stream = UnixStream::connect(socket_path).await.map_err(|e| {
+        KernelError::Transport(format!("vsock connect {}: {e}", socket_path.display()))
+    })?;
 
     let req = connect_request(port);
-    writer
+    stream
         .write_all(req.as_bytes())
         .await
         .map_err(|e| KernelError::Transport(format!("vsock write CONNECT: {e}")))?;
 
-    let mut buf_reader = BufReader::new(reader);
-    let mut line = String::new();
-    buf_reader
-        .read_line(&mut line)
-        .await
-        .map_err(|e| KernelError::Transport(format!("vsock read response: {e}")))?;
+    // Read response line byte-by-byte to avoid buffering past the newline.
+    let mut line = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        let n = stream
+            .read(&mut byte)
+            .await
+            .map_err(|e| KernelError::Transport(format!("vsock read response: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        line.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
 
-    if !is_connect_ok(&line) {
+    let response = String::from_utf8_lossy(&line).to_string();
+    if !is_connect_ok(&response) {
         return Err(KernelError::Transport(format!(
-            "vsock CONNECT {port} failed: {line}"
+            "vsock CONNECT {port} failed: {response}"
         )));
     }
 
-    let stream = buf_reader.into_inner().unsplit(writer);
     Ok(stream)
 }
 

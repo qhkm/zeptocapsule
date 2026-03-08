@@ -62,16 +62,62 @@ pub async fn put(socket_path: &Path, path: &str, body: &str) -> KernelResult<Api
         .await
         .map_err(|e| KernelError::Transport(format!("socket write: {e}")))?;
 
-    let mut buf = Vec::new();
-    stream
-        .read_to_end(&mut buf)
-        .await
-        .map_err(|e| KernelError::Transport(format!("socket read: {e}")))?;
+    // Read HTTP response: headers until \r\n\r\n, then Content-Length bytes of body.
+    let mut header_buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        stream
+            .read_exact(&mut byte)
+            .await
+            .map_err(|e| KernelError::Transport(format!("socket read header: {e}")))?;
+        header_buf.push(byte[0]);
+        if header_buf.len() >= 4
+            && header_buf[header_buf.len() - 4..] == *b"\r\n\r\n"
+        {
+            break;
+        }
+    }
 
-    let raw =
-        String::from_utf8(buf).map_err(|e| KernelError::Transport(format!("utf8 decode: {e}")))?;
+    let header_str = String::from_utf8(header_buf)
+        .map_err(|e| KernelError::Transport(format!("header utf8: {e}")))?;
 
-    parse_response(&raw).map_err(|e| KernelError::Transport(format!("parse response: {e}")))
+    // Extract Content-Length from headers (case-insensitive).
+    let content_length: usize = header_str
+        .lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            if key.trim().eq_ignore_ascii_case("content-length") {
+                value.trim().parse().ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+
+    let mut body_buf = vec![0u8; content_length];
+    if content_length > 0 {
+        stream
+            .read_exact(&mut body_buf)
+            .await
+            .map_err(|e| KernelError::Transport(format!("socket read body: {e}")))?;
+    }
+
+    let body = String::from_utf8(body_buf)
+        .map_err(|e| KernelError::Transport(format!("body utf8: {e}")))?;
+
+    // Parse status from first header line.
+    let status_line = header_str
+        .lines()
+        .next()
+        .ok_or_else(|| KernelError::Transport("empty response".into()))?;
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| KernelError::Transport("missing status code".into()))?
+        .parse()
+        .map_err(|e| KernelError::Transport(format!("invalid status: {e}")))?;
+
+    Ok(ApiResponse { status, body })
 }
 
 pub async fn put_expect_ok(
@@ -90,7 +136,10 @@ pub async fn put_expect_ok(
 }
 
 pub fn machine_config_json(vcpus: u32, mem_size_mib: u64) -> String {
-    format!(r#"{{"vcpu_count":{},"mem_size_mib":{}}}"#, vcpus, mem_size_mib)
+    format!(
+        r#"{{"vcpu_count":{},"mem_size_mib":{}}}"#,
+        vcpus, mem_size_mib
+    )
 }
 
 pub fn boot_source_json(kernel_image_path: &str, boot_args: &str) -> String {

@@ -91,7 +91,9 @@ pub fn export_to_host(image: &Path, host_path: &Path, mount_point: &Path) -> Ker
     std::fs::create_dir_all(host_path)
         .map_err(|e| KernelError::CleanupFailed(format!("mkdir host_path: {e}")))?;
 
-    mount_image_ro(image, mount_point)?;
+    // Mount read-write to allow ext4 journal replay if the guest didn't
+    // cleanly unmount (e.g. VM was killed).
+    mount_image(image, mount_point)?;
 
     let output = Command::new("sh")
         .args([
