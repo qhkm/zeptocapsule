@@ -230,6 +230,8 @@ fn do_clone(
         std::fs::create_dir_all(&workspace)?;
     }
 
+    let security = spec.security;
+
     let worker_binary = binary.to_owned();
     let worker_args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
     let mut env = env.into_iter().collect::<Vec<_>>();
@@ -269,6 +271,9 @@ fn do_clone(
                     child_stdin_r,
                     child_stdout_w,
                     child_stderr_w,
+                    security,
+                    &workspace,
+                    workspace_host.as_deref(),
                 )
             }),
             &mut stack,
@@ -347,6 +352,9 @@ fn child_main(
     stdin_fd: RawFd,
     stdout_fd: RawFd,
     stderr_fd: RawFd,
+    security: crate::types::SecurityProfile,
+    workspace_guest: &std::path::Path,
+    workspace_host: Option<&std::path::Path>,
 ) -> isize {
     let mut sync_byte = [0_u8; 1];
     unsafe { libc::read(sync_read, sync_byte.as_mut_ptr().cast(), 1) };
@@ -359,6 +367,29 @@ fn child_main(
         libc::close(stdin_fd);
         libc::close(stdout_fd);
         libc::close(stderr_fd);
+    }
+
+    // Hardened: pivot_root + capabilities drop + seccomp
+    if matches!(security, crate::types::SecurityProfile::Hardened) {
+        let new_root =
+            std::path::PathBuf::from(format!("/tmp/zk-rootfs-{}", std::process::id()));
+        if crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host)
+            .is_err()
+        {
+            return -1;
+        }
+
+        // Drop all capabilities from bounding set
+        unsafe {
+            for cap in 0..=40 {
+                libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0);
+            }
+        }
+
+        // Install seccomp filter (must be after PR_SET_NO_NEW_PRIVS)
+        if crate::seccomp::install_seccomp_filter().is_err() {
+            return -1;
+        }
     }
 
     let init_binary = match CString::new(init_binary.to_string_lossy().as_bytes()) {

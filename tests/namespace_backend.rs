@@ -90,6 +90,100 @@ async fn namespace_capsule_enforces_wall_clock_timeout() {
     );
 }
 
+#[tokio::test]
+async fn namespace_hardened_hides_host_filesystem() {
+    if !namespace_tests_enabled() {
+        return;
+    }
+
+    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
+        isolation: zeptokernel::Isolation::Namespace,
+        security: zeptokernel::SecurityProfile::Hardened,
+        workspace: zeptokernel::WorkspaceConfig {
+            host_path: Some(unique_workspace("pivot-host")),
+            guest_path: std::path::PathBuf::from("/workspace"),
+            size_mib: Some(16),
+        },
+        limits: zeptokernel::ResourceLimits {
+            timeout_sec: 5,
+            ..Default::default()
+        },
+        init_binary: Some(zk_init_binary()),
+        ..Default::default()
+    })
+    .unwrap();
+
+    // Try to read /etc/hostname from host — should fail in pivoted root
+    let child = capsule
+        .spawn(
+            "/bin/sh",
+            &[
+                "-c",
+                "cat /etc/hostname 2>/dev/null && echo VISIBLE || echo HIDDEN",
+            ],
+            HashMap::new(),
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut child.stdout, &mut buf)
+        .await
+        .ok();
+    let output = String::from_utf8_lossy(&buf);
+
+    drop(child);
+    let _report = capsule.destroy().unwrap();
+    assert!(
+        output.contains("HIDDEN"),
+        "expected host /etc to be hidden, got: {output}"
+    );
+}
+
+#[tokio::test]
+async fn namespace_hardened_has_dev_null() {
+    if !namespace_tests_enabled() {
+        return;
+    }
+
+    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
+        isolation: zeptokernel::Isolation::Namespace,
+        security: zeptokernel::SecurityProfile::Hardened,
+        workspace: zeptokernel::WorkspaceConfig {
+            host_path: Some(unique_workspace("devnull")),
+            guest_path: std::path::PathBuf::from("/workspace"),
+            size_mib: Some(16),
+        },
+        limits: zeptokernel::ResourceLimits {
+            timeout_sec: 5,
+            ..Default::default()
+        },
+        init_binary: Some(zk_init_binary()),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let child = capsule
+        .spawn(
+            "/bin/sh",
+            &["-c", "echo test > /dev/null && echo OK || echo FAIL"],
+            HashMap::new(),
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    tokio::io::AsyncReadExt::read_to_end(&mut child.stdout, &mut buf)
+        .await
+        .ok();
+    let output = String::from_utf8_lossy(&buf);
+
+    drop(child);
+    capsule.destroy().unwrap();
+    assert!(
+        output.contains("OK"),
+        "expected /dev/null to work, got: {output}"
+    );
+}
+
 fn namespace_spec(workspace: PathBuf) -> zeptokernel::CapsuleSpec {
     zeptokernel::CapsuleSpec {
         isolation: zeptokernel::Isolation::Namespace,
