@@ -368,11 +368,11 @@ The key insight: the protocol between ZeptoPM and workers doesn't change. ZeptoK
 - **Exit criteria:** `echo '{"type":"ping","seq":1}' | zk-guest` returns pong ✅
 
 ### M2: Host Supervisor + Process Backend
-- [ ] Backend trait definition
-- [ ] Process backend (spawn worker as child process, no namespace isolation)
-- [ ] Supervisor with heartbeat monitoring
-- [ ] Timeout enforcement
-- [ ] Integration test: host spawns guest, sends job, receives events
+- [x] Backend trait definition
+- [x] Process backend (spawn worker as child process, no namespace isolation)
+- [x] Supervisor with heartbeat monitoring
+- [x] Timeout enforcement
+- [x] Integration test: host spawns guest, sends job, receives events (7 tests)
 
 ### M3: Namespace Isolation (Linux)
 - [ ] User + PID + mount namespace setup
