@@ -21,6 +21,17 @@ impl Cgroup {
         Ok(Self { path })
     }
 
+    /// Create a dummy Cgroup that will silently fail all operations.
+    ///
+    /// Used as a fallback when cgroup setup is unavailable (e.g. running
+    /// without cgroup v2 delegation). The path does not exist on disk;
+    /// all writes will fail silently and `destroy()` is a no-op.
+    pub fn dummy() -> Self {
+        Self {
+            path: PathBuf::from("/sys/fs/cgroup/zeptokernel/_dummy_nonexistent"),
+        }
+    }
+
     /// Add a process to this cgroup.
     pub fn add_pid(&self, pid: u32) -> io::Result<()> {
         std::fs::write(self.path.join("cgroup.procs"), format!("{}\n", pid))
