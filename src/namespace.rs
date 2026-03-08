@@ -117,6 +117,7 @@ impl CapsuleHandle for NamespaceCapsule {
         Ok(CapsuleChild {
             stdin: Box::pin(spawn.stdin),
             stdout: Box::pin(spawn.stdout),
+            stderr: Box::pin(spawn.stderr),
             pid: spawn.child_pid.as_raw() as u32,
         })
     }
@@ -188,6 +189,7 @@ struct NamespaceSpawn {
     child_pid: Pid,
     stdin: tokio::fs::File,
     stdout: tokio::fs::File,
+    stderr: tokio::fs::File,
     cgroup: Cgroup,
     stack: Vec<u8>,
 }
@@ -208,6 +210,11 @@ fn do_clone(
         nix::unistd::pipe().map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
     let host_stdout_r = host_stdout_r_owned.into_raw_fd();
     let child_stdout_w = child_stdout_w_owned.into_raw_fd();
+
+    let (host_stderr_r_owned, child_stderr_w_owned) =
+        nix::unistd::pipe().map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    let host_stderr_r = host_stderr_r_owned.into_raw_fd();
+    let child_stderr_w = child_stderr_w_owned.into_raw_fd();
 
     let (sync_r_owned, sync_w_owned) =
         nix::unistd::pipe().map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
@@ -261,6 +268,7 @@ fn do_clone(
                     sync_r,
                     child_stdin_r,
                     child_stdout_w,
+                    child_stderr_w,
                 )
             }),
             &mut stack,
@@ -272,6 +280,7 @@ fn do_clone(
 
     let _ = nix::unistd::close(child_stdin_r);
     let _ = nix::unistd::close(child_stdout_w);
+    let _ = nix::unistd::close(child_stderr_w);
     let _ = nix::unistd::close(sync_r);
 
     if let Err(error) = write_uid_gid_maps(child_pid) {
@@ -303,11 +312,13 @@ fn do_clone(
 
     let stdin = unsafe { tokio::fs::File::from_raw_fd(host_stdin_w) };
     let stdout = unsafe { tokio::fs::File::from_raw_fd(host_stdout_r) };
+    let stderr = unsafe { tokio::fs::File::from_raw_fd(host_stderr_r) };
 
     Ok(NamespaceSpawn {
         child_pid,
         stdin,
         stdout,
+        stderr,
         cgroup,
         stack,
     })
@@ -321,6 +332,7 @@ fn child_main(
     sync_read: RawFd,
     stdin_fd: RawFd,
     stdout_fd: RawFd,
+    stderr_fd: RawFd,
 ) -> isize {
     let mut sync_byte = [0_u8; 1];
     unsafe { libc::read(sync_read, sync_byte.as_mut_ptr().cast(), 1) };
@@ -329,8 +341,10 @@ fn child_main(
     unsafe {
         libc::dup2(stdin_fd, libc::STDIN_FILENO);
         libc::dup2(stdout_fd, libc::STDOUT_FILENO);
+        libc::dup2(stderr_fd, libc::STDERR_FILENO);
         libc::close(stdin_fd);
         libc::close(stdout_fd);
+        libc::close(stderr_fd);
     }
 
     let init_binary = match CString::new(init_binary.to_string_lossy().as_bytes()) {

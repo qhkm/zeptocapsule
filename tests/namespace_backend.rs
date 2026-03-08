@@ -74,6 +74,7 @@ async fn namespace_capsule_enforces_wall_clock_timeout() {
             ..Default::default()
         },
         init_binary: Some(zk_init_binary()),
+        ..Default::default()
     })
     .unwrap();
 
@@ -102,6 +103,7 @@ fn namespace_spec(workspace: PathBuf) -> zeptokernel::CapsuleSpec {
             ..Default::default()
         },
         init_binary: Some(zk_init_binary()),
+        ..Default::default()
     }
 }
 

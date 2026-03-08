@@ -107,7 +107,7 @@ impl CapsuleHandle for ProcessCapsule {
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
         for (key, value) in env {
             cmd.env(key, value);
@@ -125,6 +125,9 @@ impl CapsuleHandle for ProcessCapsule {
         let stdout = child.stdout.take().ok_or_else(|| {
             KernelError::SpawnFailed(format!("failed to capture stdout for {binary}"))
         })?;
+        let stderr = child.stderr.take().ok_or_else(|| {
+            KernelError::SpawnFailed(format!("failed to capture stderr for {binary}"))
+        })?;
 
         state.child = Some(child);
         drop(state);
@@ -133,6 +136,7 @@ impl CapsuleHandle for ProcessCapsule {
         Ok(CapsuleChild {
             stdin: Box::pin(stdin),
             stdout: Box::pin(stdout),
+            stderr: Box::pin(stderr),
             pid,
         })
     }

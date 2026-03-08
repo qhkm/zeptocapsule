@@ -23,10 +23,12 @@ pub enum KernelError {
 
 pub type CapsuleStdin = Pin<Box<dyn AsyncWrite + Send>>;
 pub type CapsuleStdout = Pin<Box<dyn AsyncRead + Send>>;
+pub type CapsuleStderr = Pin<Box<dyn AsyncRead + Send>>;
 
 pub struct CapsuleChild {
     pub stdin: CapsuleStdin,
     pub stdout: CapsuleStdout,
+    pub stderr: CapsuleStderr,
     pub pid: u32,
 }
 
