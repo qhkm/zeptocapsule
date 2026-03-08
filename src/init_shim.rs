@@ -9,6 +9,15 @@ pub struct MountConfig {
     pub workspace_path: PathBuf,
 }
 
+/// Configuration for Firecracker-mode zk-init.
+#[derive(Debug, Clone)]
+pub struct FcInitConfig {
+    pub worker_path: String,
+    pub worker_args: Vec<String>,
+    pub workspace_device: Option<String>,
+    pub workspace_path: PathBuf,
+}
+
 impl Default for MountConfig {
     fn default() -> Self {
         Self {
@@ -46,7 +55,84 @@ pub fn is_init() -> bool {
     std::process::id() == 1
 }
 
+/// Check if env vars indicate Firecracker mode.
+pub fn is_firecracker_mode<'a>(env: impl Iterator<Item = (&'a str, &'a str)>) -> bool {
+    env.into_iter().any(|(k, _)| k == "ZK_FC_MODE")
+}
+
+/// Parse Firecracker init config from environment variables.
+pub fn parse_fc_init_config(
+    env: impl Iterator<Item = (String, String)>,
+) -> Result<FcInitConfig, String> {
+    let mut worker_path = None;
+    let mut worker_args = Vec::new();
+    let mut workspace_device = None;
+    let mut workspace_path = PathBuf::from("/workspace");
+
+    for (key, value) in env {
+        match key.as_str() {
+            "ZK_FC_WORKER_PATH" => worker_path = Some(value),
+            "ZK_FC_WORKER_ARGS" => {
+                worker_args = value.split_whitespace().map(String::from).collect();
+            }
+            "ZK_FC_WORKSPACE_DEVICE" => workspace_device = Some(value),
+            "ZK_FC_WORKSPACE_PATH" => workspace_path = PathBuf::from(value),
+            _ => {}
+        }
+    }
+
+    let worker_path = worker_path
+        .ok_or_else(|| "ZK_FC_WORKER_PATH is required in Firecracker mode".to_string())?;
+
+    Ok(FcInitConfig {
+        worker_path,
+        worker_args,
+        workspace_device,
+        workspace_path,
+    })
+}
+
+/// Run init shim in Firecracker mode.
+pub fn run_fc_init_shim() -> Result<(), String> {
+    let config = parse_fc_init_config(std::env::vars())?;
+
+    // Mount workspace device if specified
+    #[cfg(target_os = "linux")]
+    if let Some(ref device) = config.workspace_device {
+        std::fs::create_dir_all(&config.workspace_path)
+            .map_err(|e| format!("mkdir workspace: {e}"))?;
+
+        let output = Command::new("mount")
+            .arg(device)
+            .arg(&config.workspace_path)
+            .output()
+            .map_err(|e| format!("mount workspace: {e}"))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "mount workspace failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+    }
+
+    let status = Command::new(&config.worker_path)
+        .args(&config.worker_args)
+        .status()
+        .map_err(|e| format!("exec {}: {e}", config.worker_path))?;
+
+    match status.code() {
+        Some(code) => std::process::exit(code),
+        None => Err(format!("worker {} terminated by signal", config.worker_path)),
+    }
+}
+
 pub fn run_init_shim() -> Result<(), String> {
+    // Check for Firecracker mode
+    if std::env::var("ZK_FC_MODE").is_ok() {
+        return run_fc_init_shim();
+    }
+
     let (config, worker, worker_args) = init_command_from_env_and_args()?;
     setup_guest_fs(&config)?;
 
@@ -233,5 +319,60 @@ mod tests {
         assert_eq!(config.workspace_path.to_string_lossy(), "/sandbox/work");
         assert_eq!(config.workspace_size, "256m");
         assert_eq!(config.tmp_size, "32m");
+    }
+
+    #[test]
+    fn detect_firecracker_mode_from_env() {
+        let env = vec![
+            ("ZK_FC_MODE", "1"),
+            ("ZK_FC_WORKER_PATH", "/run/zeptokernel/worker"),
+        ];
+        assert!(super::is_firecracker_mode(env.into_iter()));
+    }
+
+    #[test]
+    fn detect_no_firecracker_mode() {
+        let env: Vec<(&str, &str)> = vec![];
+        assert!(!super::is_firecracker_mode(env.into_iter()));
+    }
+
+    #[test]
+    fn parse_firecracker_config_full() {
+        let env = vec![
+            ("ZK_FC_MODE".to_string(), "1".to_string()),
+            (
+                "ZK_FC_WORKER_PATH".to_string(),
+                "/run/zeptokernel/worker".to_string(),
+            ),
+            ("ZK_FC_WORKER_ARGS".to_string(), "arg1 arg2".to_string()),
+            (
+                "ZK_FC_WORKSPACE_DEVICE".to_string(),
+                "/dev/vdb".to_string(),
+            ),
+            (
+                "ZK_FC_WORKSPACE_PATH".to_string(),
+                "/workspace".to_string(),
+            ),
+        ];
+        let config = super::parse_fc_init_config(env.into_iter()).unwrap();
+        assert_eq!(config.worker_path, "/run/zeptokernel/worker");
+        assert_eq!(config.worker_args, vec!["arg1", "arg2"]);
+        assert_eq!(config.workspace_device.as_deref(), Some("/dev/vdb"));
+        assert_eq!(config.workspace_path.to_string_lossy(), "/workspace");
+    }
+
+    #[test]
+    fn parse_firecracker_config_defaults() {
+        let env = vec![
+            ("ZK_FC_MODE".to_string(), "1".to_string()),
+            (
+                "ZK_FC_WORKER_PATH".to_string(),
+                "/run/zeptokernel/worker".to_string(),
+            ),
+        ];
+        let config = super::parse_fc_init_config(env.into_iter()).unwrap();
+        assert_eq!(config.workspace_path.to_string_lossy(), "/workspace");
+        assert!(config.workspace_device.is_none());
+        assert!(config.worker_args.is_empty());
     }
 }

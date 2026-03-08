@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub use backend::{CapsuleChild, CapsuleStderr};
-pub use init_shim::{MountConfig, is_init, run_init_shim, setup_guest_fs};
+pub use init_shim::{FcInitConfig, MountConfig, is_firecracker_mode, is_init, parse_fc_init_config, run_init_shim, setup_guest_fs};
 pub use types::{
     CapsuleReport, CapsuleSpec, FirecrackerConfig, Isolation, RLimits, ResourceLimits,
     ResourceViolation, SecurityOverrides, SecurityProfile, Signal, WorkspaceConfig,
