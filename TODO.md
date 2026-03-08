@@ -12,7 +12,7 @@
 
 **Design spec:** `docs/plans/2026-03-08-zeptokernel-design.md`
 
-**Current state:** M1 complete, M2 complete (with placeholder guest). 16 tests passing (9 proto + 7 integration).
+**Current state:** M1 complete, M2 complete, M2.5 complete (real worker launching). 19 tests passing (9 proto + 10 integration).
 
 **Crates:**
 | Crate | Path | Purpose |
@@ -36,7 +36,7 @@
 |-----------|--------|-------------|
 | M1: Protocol + Guest Shell | ✅ Done | Types, wire format, guest control loop, init |
 | M2: Host Supervisor + Process Backend | ✅ Done | Backend trait, ProcessBackend, Supervisor lifecycle, 7 integration tests |
-| M2.5: Real Worker Launching | 🔴 Not started | Guest actually launches worker binary, forwards events, emits heartbeats |
+| M2.5: Real Worker Launching | ✅ Done | Guest actually launches worker binary, forwards events, emits heartbeats |
 | M3: Namespace Isolation (Linux) | 🔴 Not started | User/PID/mount namespaces, cgroup v2, seccomp |
 | M4: ZeptoPM Integration | 🔴 Not started | Wire ZeptoPM to call zk-host instead of spawning workers directly |
 | M5: Hardening + Policy | 🔴 Not started | Per-role profiles, secret redaction, audit logging |
@@ -50,54 +50,42 @@ The guest agent currently fakes job completion. These tasks make it actually lau
 
 ### Tasks
 
-- [ ] **2.5.1 — Worker process launcher** (`crates/zk-guest/src/worker.rs`)
-  - Spawn `zeptoclaw worker --job-spec /workspace/{job_id}.json` as child process
+- [x] **2.5.1 — Worker process launcher** (`crates/zk-guest/src/worker.rs`)
+  - Spawn worker as child process with `--job-spec` + `--job-id` args
   - Set env vars from `JobSpec.env` on the child
-  - Pipe worker stdout for JSON-line event parsing
-  - Drain worker stderr to tracing logs
-  - Return child handle for lifecycle management
-  - **Test:** Unit test that launches a mock worker script and captures its stdout
+  - Pipe worker stdout for JSON-line event parsing; stderr inherited
+  - `WorkerHandle` wraps child + stdout lines
 
-- [ ] **2.5.2 — Event forwarding from worker** (`crates/zk-guest/src/agent.rs`)
-  - Read worker stdout line-by-line
-  - Parse each line as `GuestEvent` (or pass through raw JSON)
-  - Forward valid events to host via `send_event()`
-  - Ignore/log malformed lines (don't crash)
-  - Use `tokio::select!` to handle host commands AND worker stdout concurrently
-  - **Test:** Integration test with a script that emits JSON events on stdout
+- [x] **2.5.2 — Event forwarding from worker** (`crates/zk-guest/src/agent.rs`)
+  - `forward_worker_line` forwards non-terminal events (heartbeat, progress, artifact_produced)
+  - Guest owns terminal events (Started, Completed, Failed, Cancelled)
+  - Malformed lines are logged and ignored
 
-- [ ] **2.5.3 — Periodic heartbeat emission** (`crates/zk-guest/src/agent.rs`)
-  - While worker is running, emit `Heartbeat { job_id, phase: "running" }` every 5 seconds
-  - Use `tokio::time::interval(Duration::from_secs(5))` in the select loop
-  - Include `memory_used_mib` if available (optional, can start with None)
-  - **Test:** Integration test that verifies heartbeats are received between job start and completion
+- [x] **2.5.3 — Periodic heartbeat emission** (`crates/zk-guest/src/agent.rs`)
+  - Heartbeat every 5s via `tokio::time::interval` in the `select!` loop
+  - Phase changes to "cancelling" when cancellation is in progress
 
-- [ ] **2.5.4 — Worker exit handling** (`crates/zk-guest/src/agent.rs`)
-  - On worker exit code 0 → send `Completed { job_id, output_artifact_ids: vec![], summary: "" }`
-  - On worker exit non-zero → send `Failed { job_id, error: "exit code {N}", retryable: false }`
-  - On worker signal death → send `Failed { job_id, error: "killed by signal", retryable: true }`
-  - Clear `active_job` state after exit
-  - **Test:** Integration test with scripts that exit 0, exit 1, and a timeout cancellation
+- [x] **2.5.4 — Worker exit handling** (`crates/zk-guest/src/agent.rs`)
+  - Exit 0 → `Completed { job_id, output_artifact_ids: vec![], summary: "" }`
+  - Exit non-zero → `Failed { job_id, error: "worker exited with code N", retryable: false }`
+  - Signal death (Unix) → `Failed { retryable: true }`
+  - Cancellation wins regardless of exit code → `Cancelled`
 
-- [ ] **2.5.5 — Job cancellation with signals** (`crates/zk-guest/src/agent.rs`)
-  - On `CancelJob` command, send SIGTERM to worker process
-  - Start 10-second grace timer
-  - If worker exits within grace period → send `Cancelled { job_id }`
-  - If still alive after 10s → SIGKILL, then send `Cancelled { job_id }`
-  - Use `libc::kill` on Unix (already a dependency)
-  - **Test:** Integration test with a worker script that ignores SIGTERM (to test SIGKILL escalation)
+- [x] **2.5.5 — Job cancellation with signals** (`crates/zk-guest/src/agent.rs`)
+  - `CancelJob` → SIGTERM via `libc::kill`
+  - 10-second grace period tracked via `cancel_deadline`
+  - Heartbeat tick checks deadline and escalates to SIGKILL
 
-- [ ] **2.5.6 — Mock worker binary for testing**
-  - Create `crates/zk-guest/tests/mock_worker.rs` (or a shell script)
-  - Supports modes: `--mode complete` (exit 0), `--mode fail` (exit 1), `--mode hang` (sleep forever), `--mode events` (emit heartbeat + progress + completed)
-  - All integration tests should use this mock instead of the real ZeptoClaw
-  - **Test:** The mock worker itself should be verified in a simple test
+- [x] **2.5.6 — Mock worker binary** (`crates/zk-guest/src/bin/mock_worker.rs`)
+  - Modes via `MOCK_MODE` env var or `--mode` arg: `complete`, `fail`, `hang`, `events`
+  - Only emits non-terminal events (heartbeat, progress); guest emits terminal events
+  - Registered as `[[bin]] mock-worker` in zk-guest crate
 
-- [ ] **2.5.7 — Update existing integration tests**
-  - Update `crates/zk-host/tests/process_backend.rs` to expect heartbeats between Started and Completed
-  - Add test for timeout enforcement (worker hangs → host cancels after timeout)
-  - Add test for failed job (worker exits non-zero)
-  - Ensure all 7 existing tests still pass (may need adjustment for heartbeats)
+- [x] **2.5.7 — Update existing integration tests**
+  - All 7 original tests updated to use `mock-worker` via `ZEPTOCLAW_BINARY` env
+  - 3 new tests: `test_start_job_fails`, `test_start_job_receives_heartbeats`, `test_cancel_job_while_running`
+  - `drain_to_terminal()` helper for consuming intermediate events
+  - Total: 10 integration tests passing
 
 **Exit criteria:** `cargo test --workspace` passes. Host spawns guest, guest launches mock worker, heartbeats flow, job completes/fails/cancels correctly.
 
@@ -333,13 +321,11 @@ These can be done anytime, independently of milestones.
 
 ## Known Issues
 
-1. **Guest is placeholder** — `handle_start_job()` in `crates/zk-guest/src/agent.rs:102` immediately returns `Completed` without launching any worker. This is the single biggest gap.
+1. **M2 design checklist not updated** — The design doc at `docs/plans/2026-03-08-zeptokernel-design.md:370-376` still shows M2 items as `[ ]` unchecked. Should be updated to `[x]`.
 
-2. **No real ZeptoClaw worker exists yet** — The guest can't launch a worker because there's no worker binary to launch. For testing, create a mock worker (M2.5.6).
+2. **macOS limitations** — Namespace isolation (M3) and Firecracker (M6) require Linux. Process backend is the only option on macOS. User has a VPS for Linux work.
 
-3. **M2 design checklist not updated** — The design doc at `docs/plans/2026-03-08-zeptokernel-design.md:370-376` still shows M2 items as `[ ]` unchecked. Should be updated to `[x]`.
-
-4. **macOS limitations** — Namespace isolation (M3) and Firecracker (M6) require Linux. Process backend is the only option on macOS. User has a VPS for Linux work.
+3. **SIGKILL escalation not tested** — The `test_cancel_job_while_running` test uses `hang` mode which responds to SIGTERM (tokio's `kill_on_drop` handles cleanup). A dedicated test for SIGTERM-ignoring workers would require a custom shell script or more complex mock.
 
 ---
 

@@ -9,6 +9,10 @@ license.workspace = true
 name = "zk-guest"
 path = "src/main.rs"
 
+[[bin]]
+name = "mock-worker"
+path = "src/bin/mock_worker.rs"
+
 [dependencies]
 zk-proto = { path = "../zk-proto" }
 serde = { workspace = true }
@@ -18,5 +22,5 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"

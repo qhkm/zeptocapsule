@@ -2,6 +2,7 @@
 //!
 //! No isolation. Same protocol. Used for development and testing on macOS/Linux.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, Lines};
@@ -87,13 +88,22 @@ impl CapsuleHandle for ProcessHandle {
 /// Backend that spawns `zk-guest` as a child process. No isolation.
 pub struct ProcessBackend {
     guest_binary: PathBuf,
+    /// Extra env vars injected into the guest process (e.g. ZEPTOCLAW_BINARY for tests).
+    extra_env: HashMap<String, String>,
 }
 
 impl ProcessBackend {
     pub fn new(guest_binary: impl Into<PathBuf>) -> Self {
         Self {
             guest_binary: guest_binary.into(),
+            extra_env: HashMap::new(),
         }
+    }
+
+    /// Add an extra environment variable for the guest process.
+    pub fn with_env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_env.insert(key.into(), value.into());
+        self
     }
 }
 
@@ -103,12 +113,15 @@ impl Backend for ProcessBackend {
     async fn spawn(&self, _spec: &JobSpec, _worker_binary: &str) -> BackendResult<ProcessHandle> {
         use tokio::process::Command;
 
-        let mut child = Command::new(&self.guest_binary)
-            .stdin(std::process::Stdio::piped())
+        let mut cmd = Command::new(&self.guest_binary);
+        cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .kill_on_drop(true);
+        for (k, v) in &self.extra_env {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn()
             .map_err(|e| {
                 BackendError::SpawnFailed(format!(
                     "failed to spawn {:?}: {e}",
