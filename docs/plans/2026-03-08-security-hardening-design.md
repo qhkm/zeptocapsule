@@ -1,5 +1,7 @@
 # ZeptoKernel Security Hardening Design
 
+> **Status: Implemented** (2026-03-08). All features below are live in `src/`.
+
 > **For Codex / agents:** This is the authoritative design for configurable security
 > hardening in ZeptoKernel. Read it fully before starting implementation.
 
