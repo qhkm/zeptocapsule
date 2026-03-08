@@ -9,6 +9,7 @@ mod cgroup;
 mod namespace;
 #[cfg(target_os = "linux")]
 mod seccomp;
+mod rootfs;
 
 use backend::{Backend, CapsuleHandle, KernelResult};
 use std::collections::HashMap;
