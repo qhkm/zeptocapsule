@@ -9,6 +9,10 @@ mod cgroup;
 mod namespace;
 #[cfg(target_os = "linux")]
 mod seccomp;
+#[cfg(target_os = "linux")]
+mod firecracker_api;
+#[cfg(target_os = "linux")]
+mod vsock;
 mod rootfs;
 
 use backend::{Backend, CapsuleHandle, KernelResult};
