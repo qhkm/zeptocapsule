@@ -1,0 +1,10 @@
+FROM rust:latest
+
+# System deps for namespace/cgroup/mount operations and debugging
+RUN apt-get update && apt-get install -y \
+    procps \
+    cgroup-tools \
+    util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
