@@ -392,9 +392,13 @@ async fn start_job<W: tokio::io::AsyncWrite + Unpin>(
         }
     };
 
-    // Determine worker binary: /zeptoclaw/worker by default, configurable via env
-    let worker_binary = std::env::var("ZEPTOCLAW_BINARY")
-        .unwrap_or_else(|_| "/zeptoclaw/worker".to_string());
+    // Determine worker binary: check spec.env first (needed for namespace backend
+    // which uses execv and doesn't inject env vars into the child process),
+    // then fall back to process env, then to the default path.
+    let worker_binary = spec.env.get("ZEPTOCLAW_BINARY")
+        .cloned()
+        .or_else(|| std::env::var("ZEPTOCLAW_BINARY").ok())
+        .unwrap_or_else(|| "/zeptoclaw/worker".to_string());
 
     send_event(
 

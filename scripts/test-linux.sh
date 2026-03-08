@@ -28,4 +28,4 @@ docker run --rm \
     -v "$HOME/.cargo/git:/usr/local/cargo/git" \
     -w /workspace \
     "$IMAGE" \
-    bash -c "cargo build --workspace && cargo test --workspace --features namespace"
+    bash -c "cargo build --workspace && cargo test --workspace --features namespace -- --test-threads=1"
