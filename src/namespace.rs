@@ -295,6 +295,10 @@ fn do_clone(
         "capsule-{}",
         NEXT_CAPSULE_ID.fetch_add(1, Ordering::Relaxed)
     );
+    let cgroup_required = spec.security_overrides.cgroup_required.unwrap_or(
+        matches!(spec.security, crate::types::SecurityProfile::Hardened)
+    );
+
     let cgroup = match Cgroup::create(&capsule_id) {
         Ok(cgroup) => {
             let _ = cgroup.add_pid(child_pid.as_raw() as u32);
@@ -302,6 +306,16 @@ fn do_clone(
             cgroup
         }
         Err(error) => {
+            if cgroup_required {
+                unsafe { libc::write(sync_w, [1_u8].as_ptr().cast(), 1) };
+                let _ = nix::unistd::close(sync_w);
+                let _ = nix::sys::signal::kill(child_pid, nix::sys::signal::Signal::SIGKILL);
+                let _ = waitpid(child_pid, None);
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("cgroup setup required but failed: {error}"),
+                ));
+            }
             tracing::warn!("cgroup setup failed for {}: {}", capsule_id, error);
             Cgroup::dummy()
         }
