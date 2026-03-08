@@ -10,3 +10,4 @@
 pub mod backend;
 pub mod capsule;
 pub mod supervisor;
+pub mod vm_config;

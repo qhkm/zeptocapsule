@@ -1,11 +1,54 @@
 //! ZeptoKernel protocol — shared types between host supervisor and guest agent.
 //!
-//! All host↔guest communication uses JSON-line messages over a transport
-//! (Unix socket in namespace mode, vsock in microVM mode).
+//! All host↔guest communication uses newline-delimited JSON over a transport:
+//! - Dev/namespace mode: Unix socket or stdin/stdout
+//! - MicroVM mode: virtio-vsock (port 7000 control, port 7001 events)
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+// ---------------------------------------------------------------------------
+// Transport constants
+// ---------------------------------------------------------------------------
+
+/// Vsock port for host→guest control commands.
+pub const VSOCK_PORT_CONTROL: u32 = 7000;
+/// Vsock port for guest→host event stream.
+pub const VSOCK_PORT_EVENTS: u32 = 7001;
+/// Current protocol version.
+pub const PROTOCOL_VERSION: u16 = 1;
+
+// ---------------------------------------------------------------------------
+// Wire envelope
+// ---------------------------------------------------------------------------
+
+/// Envelope wrapping all messages for version tracking and request correlation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Envelope<T> {
+    pub version: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    pub payload: T,
+}
+
+impl<T> Envelope<T> {
+    pub fn new(payload: T) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            request_id: None,
+            payload,
+        }
+    }
+
+    pub fn with_request_id(payload: T, id: impl Into<String>) -> Self {
+        Self {
+            version: PROTOCOL_VERSION,
+            request_id: Some(id.into()),
+            payload,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Host → Guest commands
@@ -15,6 +58,11 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostCommand {
+    /// Protocol handshake — sent immediately after vsock connection.
+    Handshake {
+        protocol_version: u16,
+        worker_profile: String,
+    },
     /// Start a job inside the capsule.
     StartJob(JobSpec),
     /// Cancel a running job.
@@ -39,12 +87,14 @@ pub struct JobSpec {
     pub workspace: WorkspaceConfig,
 }
 
-/// Reference to an input artifact (path inside the guest).
+/// Reference to an input artifact available inside the guest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactRef {
     pub artifact_id: String,
     pub guest_path: PathBuf,
     pub kind: String,
+    #[serde(default)]
+    pub summary: String,
 }
 
 /// Resource limits enforced by the kernel.
@@ -68,6 +118,9 @@ pub struct ResourceLimits {
     /// Heartbeat timeout — kill if no heartbeat for this many seconds.
     #[serde(default = "default_heartbeat_timeout")]
     pub heartbeat_timeout_sec: u64,
+    /// Max total output bytes across all artifacts.
+    #[serde(default)]
+    pub max_output_bytes: Option<u64>,
 }
 
 fn default_timeout() -> u64 {
@@ -86,6 +139,7 @@ impl Default for ResourceLimits {
             max_pids: None,
             network: false,
             heartbeat_timeout_sec: default_heartbeat_timeout(),
+            max_output_bytes: None,
         }
     }
 }
@@ -122,6 +176,12 @@ impl Default for WorkspaceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GuestEvent {
+    /// Protocol handshake acknowledgment.
+    HandshakeAck {
+        protocol_version: u16,
+        guest_id: String,
+        capabilities: Vec<String>,
+    },
     /// Guest agent is ready to accept jobs.
     Ready,
     /// Pong response to a Ping.
@@ -131,6 +191,9 @@ pub enum GuestEvent {
     /// Periodic heartbeat while job is running.
     Heartbeat {
         job_id: String,
+        phase: String,
+        #[serde(default)]
+        message: Option<String>,
         #[serde(default)]
         memory_used_mib: Option<u64>,
     },
@@ -139,24 +202,22 @@ pub enum GuestEvent {
         job_id: String,
         phase: String,
         message: String,
+        #[serde(default)]
+        percent: Option<f32>,
     },
     /// Worker is waiting (e.g. for LLM API response).
-    Waiting {
-        job_id: String,
-        reason: String,
-    },
+    Waiting { job_id: String, reason: String },
     /// Worker produced an artifact.
     ArtifactProduced {
         job_id: String,
-        artifact_id: String,
-        kind: String,
-        guest_path: PathBuf,
-        summary: String,
+        artifact: ProducedArtifact,
     },
     /// Job completed successfully.
     Completed {
         job_id: String,
         output_artifact_ids: Vec<String>,
+        #[serde(default)]
+        summary: String,
     },
     /// Job failed.
     Failed {
@@ -168,11 +229,21 @@ pub enum GuestEvent {
     Cancelled { job_id: String },
 }
 
+/// Metadata for a produced artifact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProducedArtifact {
+    pub artifact_id: String,
+    pub kind: String,
+    pub path: PathBuf,
+    pub summary: String,
+    pub size_bytes: u64,
+}
+
 impl GuestEvent {
     /// Extract the job_id from events that carry one.
     pub fn job_id(&self) -> Option<&str> {
         match self {
-            Self::Ready | Self::Pong { .. } => None,
+            Self::Ready | Self::Pong { .. } | Self::HandshakeAck { .. } => None,
             Self::Started { job_id }
             | Self::Heartbeat { job_id, .. }
             | Self::Progress { job_id, .. }
@@ -234,6 +305,12 @@ pub fn decode_line<'a, T: Deserialize<'a>>(line: &'a str) -> Result<T, ProtoErro
     serde_json::from_str(line.trim()).map_err(|e| ProtoError::InvalidMessage(e.to_string()))
 }
 
+/// Serialize a message inside an envelope.
+pub fn encode_envelope<T: Serialize>(msg: &T) -> Result<String, ProtoError> {
+    let envelope = Envelope::new(msg);
+    encode_line(&envelope)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,10 +341,86 @@ mod tests {
         let event = GuestEvent::Completed {
             job_id: "j1".into(),
             output_artifact_ids: vec!["art_1".into()],
+            summary: "done".into(),
         };
         let line = encode_line(&event).unwrap();
         let decoded: GuestEvent = decode_line(&line).unwrap();
         assert_eq!(decoded.job_id(), Some("j1"));
+    }
+
+    #[test]
+    fn roundtrip_handshake() {
+        let cmd = HostCommand::Handshake {
+            protocol_version: PROTOCOL_VERSION,
+            worker_profile: "researcher".into(),
+        };
+        let line = encode_line(&cmd).unwrap();
+        let decoded: HostCommand = decode_line(&line).unwrap();
+        match decoded {
+            HostCommand::Handshake {
+                protocol_version,
+                worker_profile,
+            } => {
+                assert_eq!(protocol_version, PROTOCOL_VERSION);
+                assert_eq!(worker_profile, "researcher");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn roundtrip_handshake_ack() {
+        let event = GuestEvent::HandshakeAck {
+            protocol_version: 1,
+            guest_id: "g1".into(),
+            capabilities: vec!["researcher".into()],
+        };
+        let line = encode_line(&event).unwrap();
+        let decoded: GuestEvent = decode_line(&line).unwrap();
+        match decoded {
+            GuestEvent::HandshakeAck {
+                guest_id,
+                capabilities,
+                ..
+            } => {
+                assert_eq!(guest_id, "g1");
+                assert_eq!(capabilities, vec!["researcher"]);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn roundtrip_artifact_produced() {
+        let event = GuestEvent::ArtifactProduced {
+            job_id: "j1".into(),
+            artifact: ProducedArtifact {
+                artifact_id: "art_1".into(),
+                kind: "markdown".into(),
+                path: PathBuf::from("/workspace/output.md"),
+                summary: "Research results".into(),
+                size_bytes: 4096,
+            },
+        };
+        let line = encode_line(&event).unwrap();
+        let decoded: GuestEvent = decode_line(&line).unwrap();
+        match decoded {
+            GuestEvent::ArtifactProduced { artifact, .. } => {
+                assert_eq!(artifact.size_bytes, 4096);
+                assert_eq!(artifact.artifact_id, "art_1");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn roundtrip_envelope() {
+        let cmd = HostCommand::Ping { seq: 42 };
+        let envelope = Envelope::with_request_id(&cmd, "req-1");
+        let line = encode_line(&envelope).unwrap();
+        let decoded: Envelope<HostCommand> = decode_line(&line).unwrap();
+        assert_eq!(decoded.version, PROTOCOL_VERSION);
+        assert_eq!(decoded.request_id.as_deref(), Some("req-1"));
     }
 
     #[test]
@@ -276,19 +429,36 @@ mod tests {
         assert_eq!(limits.timeout_sec, 300);
         assert!(!limits.network);
         assert_eq!(limits.heartbeat_timeout_sec, 60);
+        assert!(limits.max_output_bytes.is_none());
     }
 
     #[test]
     fn guest_event_job_id_extraction() {
         assert_eq!(GuestEvent::Ready.job_id(), None);
         assert_eq!(
+            GuestEvent::HandshakeAck {
+                protocol_version: 1,
+                guest_id: "g".into(),
+                capabilities: vec![],
+            }
+            .job_id(),
+            None
+        );
+        assert_eq!(
             GuestEvent::Progress {
                 job_id: "j2".into(),
                 phase: "searching".into(),
                 message: "done".into(),
+                percent: Some(0.5),
             }
             .job_id(),
             Some("j2")
         );
+    }
+
+    #[test]
+    fn vsock_port_constants() {
+        assert_eq!(VSOCK_PORT_CONTROL, 7000);
+        assert_eq!(VSOCK_PORT_EVENTS, 7001);
     }
 }

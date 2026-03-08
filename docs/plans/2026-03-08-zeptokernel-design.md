@@ -35,13 +35,28 @@ ZeptoPM (orchestrator)
 ### Transport
 
 - **Dev/namespace mode:** Unix socket or stdin/stdout JSON lines
-- **MicroVM mode:** virtio-vsock
-- **Wire format:** One JSON object per line, newline-terminated
+- **MicroVM mode:** virtio-vsock (two ports)
+  - Port 7000: host→guest control commands
+  - Port 7001: guest→host event stream
+- **Wire format:** Newline-delimited JSON (NDJSON)
+- **Envelope:** Optional `Envelope<T>` wrapper with `version` and `request_id` fields
+
+### Connection Sequence
+
+1. Host launches capsule (process, namespace, or microVM)
+2. Guest boots, mounts /proc /tmp /workspace, starts vsock agent
+3. Guest sends `ready` on event channel
+4. Host sends `handshake` with protocol version and worker profile
+5. Guest replies `handshake_ack` with guest ID and capabilities
+6. Host sends `start_job` with full JobSpec
+7. Guest launches worker, forwards events until completion
+8. Host sends `shutdown` (or guest exits after job)
 
 ### Host → Guest Commands
 
 | Command | Fields | Purpose |
 |---------|--------|---------|
+| `handshake` | `protocol_version`, `worker_profile` | Protocol negotiation |
 | `start_job` | JobSpec (see below) | Start a job in the capsule |
 | `cancel_job` | `job_id` | Cancel a running job |
 | `ping` | `seq` | Health check |
@@ -51,14 +66,15 @@ ZeptoPM (orchestrator)
 
 | Event | Key Fields | Purpose |
 |-------|-----------|---------|
+| `handshake_ack` | `protocol_version`, `guest_id`, `capabilities` | Protocol negotiation response |
 | `ready` | — | Guest agent is initialized |
 | `pong` | `seq` | Response to ping |
 | `started` | `job_id` | Worker has begun executing |
-| `heartbeat` | `job_id`, `memory_used_mib?` | Worker is alive |
-| `progress` | `job_id`, `phase`, `message` | Status update |
+| `heartbeat` | `job_id`, `phase`, `message?`, `memory_used_mib?` | Worker is alive |
+| `progress` | `job_id`, `phase`, `message`, `percent?` | Status update with optional progress % |
 | `waiting` | `job_id`, `reason` | Worker blocked (e.g. LLM API) |
-| `artifact_produced` | `job_id`, `artifact_id`, `kind`, `guest_path`, `summary` | Output file ready |
-| `completed` | `job_id`, `output_artifact_ids` | Job finished successfully |
+| `artifact_produced` | `job_id`, `artifact: {artifact_id, kind, path, summary, size_bytes}` | Output file ready |
+| `completed` | `job_id`, `output_artifact_ids`, `summary` | Job finished successfully |
 | `failed` | `job_id`, `error`, `retryable` | Job failed |
 | `cancelled` | `job_id` | Job was cancelled |
 
@@ -82,12 +98,13 @@ struct JobSpec {
 
 ```rust
 struct ResourceLimits {
-    timeout_sec: u64,          // wall clock limit (default 300)
-    memory_mib: Option<u64>,   // cgroup memory limit
-    cpu_quota: Option<f64>,    // cpu fraction (1.0 = one core)
-    max_pids: Option<u32>,     // process count limit
-    network: bool,             // outbound network allowed (default false)
+    timeout_sec: u64,           // wall clock limit (default 300)
+    memory_mib: Option<u64>,    // cgroup memory limit
+    cpu_quota: Option<f64>,     // cpu fraction (1.0 = one core)
+    max_pids: Option<u32>,      // process count limit
+    network: bool,              // outbound network allowed (default false)
     heartbeat_timeout_sec: u64, // kill if no heartbeat (default 60)
+    max_output_bytes: Option<u64>, // cap total artifact size
 }
 ```
 
@@ -135,12 +152,40 @@ Filesystem layout inside capsule:
 
 Control channel: Unix socket passed to guest agent.
 
-### V2: Firecracker MicroVM (Future)
+### V2: Firecracker MicroVM
 
-- Host launches Firecracker with minimal kernel + rootfs
-- Control via virtio-vsock
-- Artifact transfer via virtio-fs or vsock streaming
-- Snapshot/restore for prewarmed role images
+Host launches Firecracker with:
+- Stripped Linux kernel (~4-5 MiB)
+- Minimal rootfs: /init + vsock-agent + worker binary
+- virtio-vsock for control/events (no NIC needed for non-networked workers)
+- tmpfs workspace inside guest
+- Optional virtio-net for workers that need outbound HTTP
+
+VM config (`VmConfig`):
+```rust
+struct VmConfig {
+    kernel_path: PathBuf,       // stripped vmlinux
+    rootfs_path: PathBuf,       // minimal ext4 image
+    memory_mib: u64,            // default 128
+    vcpu_count: u32,            // default 1
+    vsock_enabled: bool,        // default true
+    vsock_cid: Option<u32>,     // unique per VM
+    network_enabled: bool,      // default false
+    firecracker_bin: PathBuf,   // path to firecracker binary
+    snapshot_path: Option<PathBuf>, // for fast restore
+}
+```
+
+### Snapshot Strategy (Future)
+
+Prewarmed snapshots avoid repeated boot + init cost:
+1. Boot fresh VM with role-specific rootfs
+2. Run init, start vsock agent, wait for `ready`
+3. Snapshot at this point (pre-job state)
+4. To run a job: restore snapshot → send `start_job` → done
+5. Each role gets its own snapshot: researcher-snap, writer-snap, etc.
+
+This gives sub-100ms "cold" starts since the expensive boot path is captured.
 
 ## Supervisor Lifecycle
 
@@ -180,37 +225,65 @@ On completion, failure, or cancellation:
 4. Remove workspace (unless retention configured)
 5. Report final state to ZeptoPM
 
-## Guest Agent Design
+## Guest Architecture
 
-The guest agent (`zk-guest`) runs as the first process inside the capsule.
+The guest contains exactly three processes:
 
-### Startup Sequence
+```
+/init (PID 1)
+  └── vsock-agent (control loop)
+        └── zeptoclaw-worker (the actual AI task)
+```
 
-1. Mount tmpfs at /workspace and /tmp
-2. Set hostname
-3. Open control channel
-4. Send `ready` event
-5. Wait for `start_job` command
+### Guest Init (`/init`)
 
-### Job Execution
+Responsibilities:
+1. Mount /proc
+2. Mount /tmp as tmpfs (64M, nosuid, nodev)
+3. Mount /workspace as tmpfs (128M, nosuid, nodev)
+4. Set hostname
+5. Start vsock agent
+6. Reap children (PID 1 duty)
+7. Handle shutdown signal
+
+### Vsock Agent (`zk-guest`)
+
+Responsibilities:
+1. Connect/listen on vsock ports (7000 control, 7001 events)
+2. Send `ready` event
+3. Handle `handshake` → reply `handshake_ack`
+4. Handle `start_job` → launch worker, forward events
+5. Handle `cancel_job` → SIGTERM/SIGKILL worker
+6. Handle `ping` → reply `pong`
+7. Handle `shutdown` → clean exit
+8. Enforce single-active-job rule
+
+### Worker Launch
 
 1. Receive `start_job` with JobSpec
-2. Write job spec to /workspace/job-spec.json
+2. Write job spec to /workspace/{job_id}.json
 3. Set environment variables from `spec.env`
-4. Launch: `zeptoclaw worker --job-spec /workspace/job-spec.json`
-5. Read worker stdout, parse JSON-line events
-6. Forward valid events to host
-7. Start heartbeat timer (emit heartbeat every 15s)
-8. On worker exit, send `completed` or `failed`
+4. Launch: `zeptoclaw worker --job-spec /workspace/{job_id}.json`
+5. Read worker stdout line by line, parse JSON events
+6. Forward valid events to host via event channel
+7. Emit heartbeat every 5s while worker is running
+8. On worker exit code 0 → send `completed`
+9. On worker exit non-zero → send `failed`
+
+### Cancellation
+
+1. Host sends `cancel_job { job_id }`
+2. Vsock agent sends SIGTERM to worker process tree
+3. Grace period: 10s
+4. SIGKILL if still alive
+5. Emit `cancelled { job_id }` or `failed { job_id, ... }` to host
 
 ### Shutdown
 
-1. Receive `shutdown` or `cancel_job`
-2. Send SIGTERM to worker
-3. Wait up to 10s for exit
-4. SIGKILL if still alive
-5. Report final status
-6. Exit
+1. Host sends `shutdown`
+2. Agent terminates any active worker (SIGTERM → SIGKILL)
+3. Agent exits
+4. Init reaps children, exits → guest kernel halts
 
 ## Security Model
 
@@ -280,10 +353,19 @@ The key insight: the protocol between ZeptoPM and workers doesn't change. ZeptoK
 
 ### M1: Protocol + Guest Agent Shell
 - [x] Define HostCommand, GuestEvent, JobSpec types
+- [x] Handshake / HandshakeAck protocol negotiation
+- [x] Envelope wrapper with version + request_id
+- [x] ProducedArtifact struct with size_bytes
+- [x] Vsock port constants (7000 control, 7001 events)
 - [x] JSON-line encode/decode helpers
 - [x] Guest agent control loop (stdin/stdout)
-- [ ] Unit tests for protocol roundtrips
-- **Exit criteria:** `echo '{"type":"ping","seq":1}' | zk-guest` returns pong
+- [x] Guest init module (mount proc/tmpfs/workspace, Linux-only)
+- [x] Guest single-active-job enforcement
+- [x] VM config types (Firecracker launcher config)
+- [x] Host capsule handshake tracking
+- [x] Unit tests for protocol roundtrips (9 tests)
+- [x] Smoke test: handshake + ping + shutdown flow
+- **Exit criteria:** `echo '{"type":"ping","seq":1}' | zk-guest` returns pong ✅
 
 ### M2: Host Supervisor + Process Backend
 - [ ] Backend trait definition

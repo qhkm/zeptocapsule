@@ -10,4 +10,5 @@
 //! - Reap child processes
 
 pub mod agent;
+pub mod init;
 pub mod worker;

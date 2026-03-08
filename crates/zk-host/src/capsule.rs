@@ -12,6 +12,10 @@ pub struct Capsule {
     pub created_at: Instant,
     pub last_heartbeat: Option<Instant>,
     pub exit_reason: Option<String>,
+    /// Guest ID reported during handshake.
+    pub guest_id: Option<String>,
+    /// Whether the handshake has completed.
+    pub handshake_done: bool,
 }
 
 impl Capsule {
@@ -24,6 +28,8 @@ impl Capsule {
             created_at: Instant::now(),
             last_heartbeat: None,
             exit_reason: None,
+            guest_id: None,
+            handshake_done: false,
         }
     }
 
@@ -33,5 +39,11 @@ impl Capsule {
 
     pub fn elapsed_since_heartbeat(&self) -> Option<std::time::Duration> {
         self.last_heartbeat.map(|t| t.elapsed())
+    }
+
+    pub fn complete_handshake(&mut self, guest_id: String) {
+        self.guest_id = Some(guest_id);
+        self.handshake_done = true;
+        self.state = CapsuleState::Ready;
     }
 }
