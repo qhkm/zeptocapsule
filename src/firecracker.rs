@@ -415,6 +415,7 @@ impl CapsuleHandle for FirecrackerCapsule {
     }
 
     fn destroy(mut self: Box<Self>) -> KernelResult<CapsuleReport> {
+        // 1. Kill Firecracker process if running
         if let Some(ref mut child) = self.fc_process {
             let _ = child.kill();
             let _ = child.wait();
@@ -423,6 +424,33 @@ impl CapsuleHandle for FirecrackerCapsule {
         let wall_time = self.started_at.elapsed();
         let killed_by = self.killed_by.lock().unwrap().take();
 
+        // 2. Export workspace back to host if configured
+        if let Some(ref host_path) = self.spec.workspace.host_path {
+            use crate::workspace_image;
+            let ws_image = workspace_image::image_path(&self.state_dir);
+            if ws_image.exists() {
+                let mount_point = self.state_dir.join("ws_export_mount");
+                if let Err(e) = workspace_image::export_to_host(&ws_image, host_path, &mount_point) {
+                    tracing::warn!("workspace export failed: {e}");
+                }
+            }
+        }
+
+        // 3. Read serial log for diagnostics
+        let serial = serial_log_path(&self.state_dir);
+        let serial_hint = if serial.exists() {
+            std::fs::read_to_string(&serial)
+                .ok()
+                .and_then(|log| extract_serial_hint(&log))
+        } else {
+            None
+        };
+
+        if let Some(ref hint) = serial_hint {
+            tracing::debug!("serial log hints: {hint}");
+        }
+
+        // 4. Clean up state directory
         if self.state_dir.exists() {
             let _ = std::fs::remove_dir_all(&self.state_dir);
         }
@@ -477,6 +505,29 @@ fn create_state_dir() -> KernelResult<PathBuf> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| KernelError::SpawnFailed(format!("create state_dir: {e}")))?;
     Ok(dir)
+}
+
+/// Extract a diagnostic hint from the serial log if boot/runtime errors are present.
+/// Returns at most a few lines of relevant context, not the full log.
+fn extract_serial_hint(log: &str) -> Option<String> {
+    let error_patterns = ["panic", "error", "failed", "fatal", "Oops"];
+    let mut hints = Vec::new();
+
+    for line in log.lines() {
+        let lower = line.to_lowercase();
+        if error_patterns.iter().any(|p| lower.contains(p)) {
+            hints.push(line.to_string());
+            if hints.len() >= 5 {
+                break;
+            }
+        }
+    }
+
+    if hints.is_empty() {
+        None
+    } else {
+        Some(hints.join("\n"))
+    }
 }
 
 #[cfg(test)]
@@ -576,5 +627,26 @@ mod tests {
     #[test]
     fn control_message_kill() {
         assert_eq!(control_message(Signal::Kill), "KILL\n");
+    }
+
+    #[test]
+    fn extract_serial_hint_finds_panic() {
+        let log = "booting kernel...\nKernel panic - not syncing: VFS\nend trace\n";
+        let hint = extract_serial_hint(log);
+        assert!(hint.is_some());
+        assert!(hint.unwrap().contains("panic"));
+    }
+
+    #[test]
+    fn extract_serial_hint_empty_log() {
+        let hint = extract_serial_hint("");
+        assert!(hint.is_none());
+    }
+
+    #[test]
+    fn extract_serial_hint_no_errors() {
+        let log = "booting kernel...\nStarting zk-init\nREADY\n";
+        let hint = extract_serial_hint(log);
+        assert!(hint.is_none());
     }
 }
