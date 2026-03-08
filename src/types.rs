@@ -9,6 +9,34 @@ pub enum Isolation {
 }
 
 #[derive(Debug, Clone)]
+pub struct FirecrackerConfig {
+    pub firecracker_bin: PathBuf,
+    pub kernel_path: PathBuf,
+    pub rootfs_path: PathBuf,
+    pub vcpus: Option<u32>,
+    pub memory_mib: Option<u64>,
+    pub enable_network: bool,
+    pub tap_name: Option<String>,
+}
+
+impl FirecrackerConfig {
+    /// Effective vCPU count: explicit > ceil(cpu_quota) > 1.
+    pub fn effective_vcpus(&self, limits: &ResourceLimits) -> u32 {
+        self.vcpus.unwrap_or_else(|| {
+            limits
+                .cpu_quota
+                .map(|q| (q.ceil() as u32).max(1))
+                .unwrap_or(1)
+        })
+    }
+
+    /// Effective guest memory: explicit > limits.memory_mib > 256.
+    pub fn effective_memory_mib(&self, limits: &ResourceLimits) -> u64 {
+        self.memory_mib.or(limits.memory_mib).unwrap_or(256)
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CapsuleSpec {
     pub isolation: Isolation,
     pub workspace: WorkspaceConfig,
@@ -16,19 +44,33 @@ pub struct CapsuleSpec {
     pub init_binary: Option<PathBuf>,
     pub security: SecurityProfile,
     pub security_overrides: SecurityOverrides,
+    pub firecracker: Option<FirecrackerConfig>,
 }
 
 impl CapsuleSpec {
     pub fn validate(&self) -> Result<(), String> {
         match (self.isolation, self.security) {
             (Isolation::Process, SecurityProfile::Hardened) => {
-                Err("Hardened security profile requires Namespace isolation".into())
+                return Err("Hardened security profile requires Namespace isolation".into())
             }
             (Isolation::Namespace, SecurityProfile::Dev) => {
-                Err("Dev security profile only works with Process isolation".into())
+                return Err("Dev security profile only works with Process isolation".into())
             }
-            _ => Ok(()),
+            _ => {}
         }
+
+        if self.isolation == Isolation::Firecracker {
+            if self.firecracker.is_none() {
+                return Err("Firecracker isolation requires firecracker config".into());
+            }
+            if self.limits.max_pids.is_some() {
+                return Err(
+                    "max_pids is not supported with Firecracker isolation".into(),
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -41,6 +83,7 @@ impl Default for CapsuleSpec {
             init_binary: None,
             security: SecurityProfile::default(),
             security_overrides: SecurityOverrides::default(),
+            firecracker: None,
         }
     }
 }
@@ -204,5 +247,120 @@ mod tests {
             ..Default::default()
         };
         assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn firecracker_config_default_fields() {
+        let config = FirecrackerConfig {
+            firecracker_bin: PathBuf::from("/usr/bin/firecracker"),
+            kernel_path: PathBuf::from("/var/lib/zk/vmlinux"),
+            rootfs_path: PathBuf::from("/var/lib/zk/rootfs.ext4"),
+            vcpus: None,
+            memory_mib: None,
+            enable_network: false,
+            tap_name: None,
+        };
+        assert_eq!(
+            config.firecracker_bin,
+            PathBuf::from("/usr/bin/firecracker")
+        );
+        assert!(!config.enable_network);
+        assert!(config.vcpus.is_none());
+    }
+
+    #[test]
+    fn validate_firecracker_requires_firecracker_config() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Firecracker,
+            security: SecurityProfile::Standard,
+            ..Default::default()
+        };
+        let err = spec.validate().unwrap_err();
+        assert!(
+            err.contains("firecracker"),
+            "error should mention firecracker config: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_firecracker_with_config_ok() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Firecracker,
+            security: SecurityProfile::Standard,
+            firecracker: Some(FirecrackerConfig {
+                firecracker_bin: PathBuf::from("/usr/bin/firecracker"),
+                kernel_path: PathBuf::from("/var/lib/zk/vmlinux"),
+                rootfs_path: PathBuf::from("/var/lib/zk/rootfs.ext4"),
+                vcpus: None,
+                memory_mib: None,
+                enable_network: false,
+                tap_name: None,
+            }),
+            ..Default::default()
+        };
+        assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_firecracker_rejects_max_pids() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Firecracker,
+            security: SecurityProfile::Standard,
+            limits: ResourceLimits {
+                max_pids: Some(100),
+                ..Default::default()
+            },
+            firecracker: Some(FirecrackerConfig {
+                firecracker_bin: PathBuf::from("/usr/bin/firecracker"),
+                kernel_path: PathBuf::from("/var/lib/zk/vmlinux"),
+                rootfs_path: PathBuf::from("/var/lib/zk/rootfs.ext4"),
+                vcpus: None,
+                memory_mib: None,
+                enable_network: false,
+                tap_name: None,
+            }),
+            ..Default::default()
+        };
+        let err = spec.validate().unwrap_err();
+        assert!(
+            err.contains("max_pids"),
+            "error should mention max_pids: {err}"
+        );
+    }
+
+    #[test]
+    fn firecracker_derived_vcpus() {
+        let config = FirecrackerConfig {
+            firecracker_bin: PathBuf::from("/usr/bin/firecracker"),
+            kernel_path: PathBuf::from("/var/lib/zk/vmlinux"),
+            rootfs_path: PathBuf::from("/var/lib/zk/rootfs.ext4"),
+            vcpus: None,
+            memory_mib: None,
+            enable_network: false,
+            tap_name: None,
+        };
+        let limits = ResourceLimits {
+            cpu_quota: Some(2.5),
+            memory_mib: Some(512),
+            ..Default::default()
+        };
+        assert_eq!(config.effective_vcpus(&limits), 3);
+        assert_eq!(config.effective_memory_mib(&limits), 512);
+    }
+
+    #[test]
+    fn firecracker_derived_defaults() {
+        let config = FirecrackerConfig {
+            firecracker_bin: PathBuf::from("/usr/bin/firecracker"),
+            kernel_path: PathBuf::from("/var/lib/zk/vmlinux"),
+            rootfs_path: PathBuf::from("/var/lib/zk/rootfs.ext4"),
+            vcpus: None,
+            memory_mib: None,
+            enable_network: false,
+            tap_name: None,
+        };
+        let limits = ResourceLimits::default();
+        assert_eq!(config.effective_vcpus(&limits), 1);
+        assert_eq!(config.effective_memory_mib(&limits), 256);
     }
 }

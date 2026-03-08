@@ -18,8 +18,8 @@ use std::path::PathBuf;
 pub use backend::{CapsuleChild, CapsuleStderr};
 pub use init_shim::{MountConfig, is_init, run_init_shim, setup_guest_fs};
 pub use types::{
-    CapsuleReport, CapsuleSpec, Isolation, RLimits, ResourceLimits, ResourceViolation,
-    SecurityOverrides, SecurityProfile, Signal, WorkspaceConfig,
+    CapsuleReport, CapsuleSpec, FirecrackerConfig, Isolation, RLimits, ResourceLimits,
+    ResourceViolation, SecurityOverrides, SecurityProfile, Signal, WorkspaceConfig,
 };
 
 pub struct Capsule {
