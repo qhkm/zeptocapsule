@@ -20,3 +20,9 @@ thiserror = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[features]
+namespace = ["dep:nix"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["sched", "mount", "process", "user", "signal"], optional = true }

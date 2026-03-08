@@ -12,3 +12,8 @@ pub mod capsule;
 pub mod process_backend;
 pub mod supervisor;
 pub mod vm_config;
+
+#[cfg(all(target_os = "linux", feature = "namespace"))]
+pub mod cgroup;
+#[cfg(all(target_os = "linux", feature = "namespace"))]
+pub mod namespace_backend;
