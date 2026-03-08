@@ -7,6 +7,8 @@ mod types;
 mod cgroup;
 #[cfg(target_os = "linux")]
 mod namespace;
+#[cfg(target_os = "linux")]
+mod seccomp;
 
 use backend::{Backend, CapsuleHandle, KernelResult};
 use std::collections::HashMap;
