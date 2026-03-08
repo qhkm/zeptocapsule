@@ -113,6 +113,37 @@ impl CapsuleHandle for ProcessCapsule {
             cmd.env(key, value);
         }
 
+        #[cfg(unix)]
+        if matches!(self.spec.security, crate::types::SecurityProfile::Dev) {
+            let rlimits = crate::types::RLimits::from(&self.spec.limits);
+            unsafe {
+                cmd.pre_exec(move || {
+                    if let Some(mem) = rlimits.max_memory_bytes {
+                        let rlim = libc::rlimit {
+                            rlim_cur: mem,
+                            rlim_max: mem,
+                        };
+                        libc::setrlimit(libc::RLIMIT_AS, &rlim);
+                    }
+                    if let Some(cpu) = rlimits.max_cpu_seconds {
+                        let rlim = libc::rlimit {
+                            rlim_cur: cpu,
+                            rlim_max: cpu,
+                        };
+                        libc::setrlimit(libc::RLIMIT_CPU, &rlim);
+                    }
+                    if let Some(fsize) = rlimits.max_file_size_bytes {
+                        let rlim = libc::rlimit {
+                            rlim_cur: fsize,
+                            rlim_max: fsize,
+                        };
+                        libc::setrlimit(libc::RLIMIT_FSIZE, &rlim);
+                    }
+                    Ok(())
+                });
+            }
+        }
+
         let mut child = cmd
             .spawn()
             .map_err(|e| KernelError::SpawnFailed(format!("failed to spawn {binary}: {e}")))?;

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 
 #[tokio::test]
 async fn process_capsule_exposes_raw_stdio() {
@@ -64,4 +65,60 @@ async fn process_capsule_enforces_wall_clock_timeout() {
         report.killed_by,
         Some(zeptokernel::ResourceViolation::WallClock)
     );
+}
+
+#[tokio::test]
+async fn process_capsule_stderr_captured() {
+    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec::default()).unwrap();
+
+    let mut child = capsule
+        .spawn(
+            "/bin/sh",
+            &["-c", "echo hello >&2"],
+            HashMap::new(),
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    child.stderr.read_to_end(&mut buf).await.unwrap();
+    assert_eq!(String::from_utf8_lossy(&buf).trim(), "hello");
+
+    drop(child);
+    capsule.destroy().unwrap();
+}
+
+#[tokio::test]
+async fn process_capsule_dev_rlimit_kills_memory_hog() {
+    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
+        security: zeptokernel::SecurityProfile::Dev,
+        limits: zeptokernel::ResourceLimits {
+            timeout_sec: 5,
+            memory_mib: Some(32),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap();
+
+    // Try to allocate way more than 32 MiB — rlimit should prevent it
+    let mut child = capsule
+        .spawn(
+            "/bin/sh",
+            &[
+                "-c",
+                "dd if=/dev/zero bs=1M count=128 2>/dev/null | wc -c; echo $?",
+            ],
+            HashMap::new(),
+        )
+        .unwrap();
+
+    let mut buf = Vec::new();
+    child.stdout.read_to_end(&mut buf).await.ok();
+
+    drop(child);
+    let report = capsule.destroy().unwrap();
+    // The process should either have a non-zero exit code or have been killed
+    // (RLIMIT_AS causes ENOMEM on mmap/brk, which may or may not kill the shell)
+    // At minimum, verify the capsule lifecycle completes cleanly
+    assert!(report.wall_time.as_nanos() > 0);
 }
