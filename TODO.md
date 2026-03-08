@@ -21,9 +21,10 @@ Implemented:
 ## Remaining TODO
 
 - [ ] Run `scripts/test-linux.sh` on a privileged Linux/Docker host to execute the namespace runtime tests end-to-end
-- [ ] Rewire ZeptoPM to depend only on `zeptokernel`
+- [ ] Confirm ZeptoPM integration against the pushed `zeptokernel` API on Linux, not just unit tests
 - [ ] Decide how ZeptoPM resolves and ships the `zk-init` binary path in dev, CI, and deployment
-- [ ] Add Firecracker only after the thin API is proven in ZeptoPM
+- [ ] Implement M6 Firecracker backend following `docs/plans/2026-03-08-m6-firecracker-backend-design.md`
+- [ ] Build and document the guest rootfs/kernel artifact flow required by the Firecracker backend
 
 ## Key Files
 
@@ -41,3 +42,4 @@ Implemented:
 
 - `docs/plans/2026-03-08-kernel-redesign.md`
 - `docs/plans/2026-03-08-kernel-redesign-impl.md`
+- `docs/plans/2026-03-08-m6-firecracker-backend-design.md`

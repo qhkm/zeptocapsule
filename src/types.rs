@@ -51,10 +51,10 @@ impl CapsuleSpec {
     pub fn validate(&self) -> Result<(), String> {
         match (self.isolation, self.security) {
             (Isolation::Process, SecurityProfile::Hardened) => {
-                return Err("Hardened security profile requires Namespace isolation".into())
+                return Err("Hardened security profile requires Namespace isolation".into());
             }
             (Isolation::Namespace, SecurityProfile::Dev) => {
-                return Err("Dev security profile only works with Process isolation".into())
+                return Err("Dev security profile only works with Process isolation".into());
             }
             _ => {}
         }
@@ -64,9 +64,7 @@ impl CapsuleSpec {
                 return Err("Firecracker isolation requires firecracker config".into());
             }
             if self.limits.max_pids.is_some() {
-                return Err(
-                    "max_pids is not supported with Firecracker isolation".into(),
-                );
+                return Err("max_pids is not supported with Firecracker isolation".into());
             }
         }
 

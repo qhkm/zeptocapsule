@@ -300,9 +300,10 @@ fn do_clone(
         "capsule-{}",
         NEXT_CAPSULE_ID.fetch_add(1, Ordering::Relaxed)
     );
-    let cgroup_required = spec.security_overrides.cgroup_required.unwrap_or(
-        matches!(spec.security, crate::types::SecurityProfile::Hardened)
-    );
+    let cgroup_required = spec.security_overrides.cgroup_required.unwrap_or(matches!(
+        spec.security,
+        crate::types::SecurityProfile::Hardened
+    ));
 
     let cgroup = match Cgroup::create(&capsule_id) {
         Ok(cgroup) => {
@@ -371,11 +372,8 @@ fn child_main(
 
     // Hardened: pivot_root + capabilities drop + seccomp
     if matches!(security, crate::types::SecurityProfile::Hardened) {
-        let new_root =
-            std::path::PathBuf::from(format!("/tmp/zk-rootfs-{}", std::process::id()));
-        if crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host)
-            .is_err()
-        {
+        let new_root = std::path::PathBuf::from(format!("/tmp/zk-rootfs-{}", std::process::id()));
+        if crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host).is_err() {
             return -1;
         }
 

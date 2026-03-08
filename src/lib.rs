@@ -6,25 +6,28 @@ mod types;
 #[cfg(target_os = "linux")]
 mod cgroup;
 #[cfg(target_os = "linux")]
-mod namespace;
-#[cfg(target_os = "linux")]
-mod seccomp;
+mod firecracker;
 #[cfg(target_os = "linux")]
 mod firecracker_api;
 #[cfg(target_os = "linux")]
+mod namespace;
+mod rootfs;
+#[cfg(target_os = "linux")]
+mod seccomp;
+#[cfg(target_os = "linux")]
 mod vsock;
 #[cfg(target_os = "linux")]
-mod firecracker;
-#[cfg(target_os = "linux")]
 mod workspace_image;
-mod rootfs;
 
 use backend::{Backend, CapsuleHandle, KernelResult};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub use backend::{CapsuleChild, CapsuleStderr};
-pub use init_shim::{FcInitConfig, MountConfig, is_firecracker_mode, is_init, parse_fc_init_config, run_init_shim, setup_guest_fs};
+pub use init_shim::{
+    FcInitConfig, MountConfig, is_firecracker_mode, is_init, parse_fc_init_config, run_init_shim,
+    setup_guest_fs,
+};
 pub use types::{
     CapsuleReport, CapsuleSpec, FirecrackerConfig, Isolation, RLimits, ResourceLimits,
     ResourceViolation, SecurityOverrides, SecurityProfile, Signal, WorkspaceConfig,

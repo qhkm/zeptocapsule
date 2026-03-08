@@ -1,0 +1,75 @@
+# Dockerfile.firecracker — Test image for Firecracker integration tests.
+#
+# Extends the dev image with:
+#   - Firecracker binary (v1.11.0)
+#   - Pre-built vmlinux kernel (from Firecracker CI)
+#   - Minimal Alpine rootfs (built in-container)
+#   - e2fsprogs for mkfs.ext4 / mount operations
+#
+# Requires: Linux host with /dev/kvm access.
+# Does NOT work on macOS Docker Desktop (no KVM passthrough).
+#
+# Build:
+#   docker build -t zeptokernel-fc -f Dockerfile.firecracker .
+#
+# Run:
+#   docker run --rm --privileged --device /dev/kvm \
+#     -v $(pwd):/workspace \
+#     zeptokernel-fc
+
+FROM rust:latest
+
+# System deps: namespace/cgroup tests + Firecracker rootfs building
+RUN apt-get update && apt-get install -y \
+    procps \
+    cgroup-tools \
+    util-linux \
+    e2fsprogs \
+    musl-tools \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add x86_64-unknown-linux-musl
+
+# --- Firecracker binary ---
+ARG FC_VERSION=v1.11.0
+ARG FC_ARCH=x86_64
+RUN mkdir -p /opt/firecracker && \
+    wget -q -O /tmp/fc.tgz \
+        "https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-${FC_ARCH}.tgz" && \
+    tar xzf /tmp/fc.tgz -C /tmp && \
+    cp "/tmp/release-${FC_VERSION}-${FC_ARCH}/firecracker-${FC_VERSION}-${FC_ARCH}" /opt/firecracker/firecracker && \
+    chmod +x /opt/firecracker/firecracker && \
+    rm -rf /tmp/fc.tgz /tmp/release-*
+
+# --- Kernel image (vmlinux) ---
+# Firecracker quickstart kernels hosted on S3.
+ARG FC_ARCH=x86_64
+RUN wget -q -O /opt/firecracker/vmlinux \
+        "https://s3.amazonaws.com/spec.ccfc.min/img/quickstart_guide/${FC_ARCH}/kernels/vmlinux.bin" && \
+    chmod 644 /opt/firecracker/vmlinux
+
+# --- Minimal rootfs ---
+# Built inline so the image is self-contained. Alpine minirootfs provides
+# /bin/sh, /bin/cat, /bin/sleep (busybox) needed by integration tests.
+# Uses mkfs.ext4 -d to populate from directory (no loop mount needed during build).
+ARG ALPINE_VERSION=3.21.3
+RUN set -eux; \
+    ROOTFS=/opt/firecracker/rootfs.ext4; \
+    WORK=$(mktemp -d); \
+    mkdir -p "$WORK/rootfs"; \
+    wget -q -O "$WORK/alpine.tar.gz" \
+        "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-${ALPINE_VERSION}-x86_64.tar.gz"; \
+    tar xzf "$WORK/alpine.tar.gz" -C "$WORK/rootfs"; \
+    mkdir -p "$WORK/rootfs"/{proc,sys,dev,tmp,run/zeptokernel,workspace,sbin}; \
+    printf '#!/bin/sh\necho "ERROR: zk-init not staged"; exec /bin/sh\n' > "$WORK/rootfs/sbin/init"; \
+    chmod 755 "$WORK/rootfs/sbin/init"; \
+    mkfs.ext4 -F -L zk-rootfs -d "$WORK/rootfs" "$ROOTFS" 128M; \
+    rm -rf "$WORK"
+
+# Env vars for the integration test suite
+ENV ZK_FC_BIN=/opt/firecracker/firecracker
+ENV ZK_FC_KERNEL=/opt/firecracker/vmlinux
+ENV ZK_FC_ROOTFS=/opt/firecracker/rootfs.ext4
+
+WORKDIR /workspace

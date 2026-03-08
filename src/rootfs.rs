@@ -32,15 +32,40 @@ pub struct RootfsLayout {
 pub fn rootfs_layout() -> RootfsLayout {
     RootfsLayout {
         bind_mounts: vec![
-            BindMount { host: "/bin".into(), guest: "/bin".into(), readonly: true },
-            BindMount { host: "/lib".into(), guest: "/lib".into(), readonly: true },
-            BindMount { host: "/lib64".into(), guest: "/lib64".into(), readonly: true },
-            BindMount { host: "/usr".into(), guest: "/usr".into(), readonly: true },
+            BindMount {
+                host: "/bin".into(),
+                guest: "/bin".into(),
+                readonly: true,
+            },
+            BindMount {
+                host: "/lib".into(),
+                guest: "/lib".into(),
+                readonly: true,
+            },
+            BindMount {
+                host: "/lib64".into(),
+                guest: "/lib64".into(),
+                readonly: true,
+            },
+            BindMount {
+                host: "/usr".into(),
+                guest: "/usr".into(),
+                readonly: true,
+            },
         ],
         devices: vec![
-            DeviceNode { host: "/dev/null".into(), guest: "/dev/null".into() },
-            DeviceNode { host: "/dev/zero".into(), guest: "/dev/zero".into() },
-            DeviceNode { host: "/dev/urandom".into(), guest: "/dev/urandom".into() },
+            DeviceNode {
+                host: "/dev/null".into(),
+                guest: "/dev/null".into(),
+            },
+            DeviceNode {
+                host: "/dev/zero".into(),
+                guest: "/dev/zero".into(),
+            },
+            DeviceNode {
+                host: "/dev/urandom".into(),
+                guest: "/dev/urandom".into(),
+            },
         ],
     }
 }
@@ -69,8 +94,7 @@ pub fn setup_and_pivot(
         if !Path::new(&mount.host).exists() {
             continue; // /lib64 may not exist on all systems
         }
-        std::fs::create_dir_all(&target)
-            .map_err(|e| format!("mkdir {}: {e}", target.display()))?;
+        std::fs::create_dir_all(&target).map_err(|e| format!("mkdir {}: {e}", target.display()))?;
         bind_mount_ro(Path::new(&mount.host), &target)?;
     }
 
@@ -80,8 +104,7 @@ pub fn setup_and_pivot(
     for dev in &layout.devices {
         let target = new_root.join(dev.guest.trim_start_matches('/'));
         // Create empty file to mount over
-        std::fs::write(&target, b"")
-            .map_err(|e| format!("create {}: {e}", target.display()))?;
+        std::fs::write(&target, b"").map_err(|e| format!("create {}: {e}", target.display()))?;
         bind_mount_ro(Path::new(&dev.host), &target)?;
     }
 
@@ -258,8 +281,8 @@ fn mount_tmpfs(target: &Path, size: &str) -> Result<(), String> {
         .map_err(|e| format!("CString {}: {e}", target.display()))?;
     let fstype = CString::new("tmpfs").map_err(|e| format!("CString: {e}"))?;
     let source = CString::new("tmpfs").map_err(|e| format!("CString: {e}"))?;
-    let opts = CString::new(format!("size={size},nosuid,nodev"))
-        .map_err(|e| format!("CString: {e}"))?;
+    let opts =
+        CString::new(format!("size={size},nosuid,nodev")).map_err(|e| format!("CString: {e}"))?;
 
     let ret = unsafe {
         libc::mount(
@@ -287,7 +310,11 @@ mod tests {
     #[test]
     fn rootfs_layout_has_required_directories() {
         let layout = rootfs_layout();
-        let dirs: Vec<&str> = layout.bind_mounts.iter().map(|m| m.guest.as_str()).collect();
+        let dirs: Vec<&str> = layout
+            .bind_mounts
+            .iter()
+            .map(|m| m.guest.as_str())
+            .collect();
         assert!(dirs.contains(&"/bin"), "missing /bin");
         assert!(dirs.contains(&"/lib"), "missing /lib");
         assert!(dirs.contains(&"/usr"), "missing /usr");

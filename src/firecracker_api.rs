@@ -71,9 +71,7 @@ pub async fn put(socket_path: &Path, path: &str, body: &str) -> KernelResult<Api
             .await
             .map_err(|e| KernelError::Transport(format!("socket read header: {e}")))?;
         header_buf.push(byte[0]);
-        if header_buf.len() >= 4
-            && header_buf[header_buf.len() - 4..] == *b"\r\n\r\n"
-        {
+        if header_buf.len() >= 4 && header_buf[header_buf.len() - 4..] == *b"\r\n\r\n" {
             break;
         }
     }

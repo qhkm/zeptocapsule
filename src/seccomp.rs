@@ -176,8 +176,7 @@ pub fn install_seccomp_filter() -> Result<(), String> {
         filter: filter.as_ptr() as *mut _,
     };
 
-    let ret =
-        unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
     if ret != 0 {
         return Err(format!(
             "PR_SET_NO_NEW_PRIVS failed: {}",

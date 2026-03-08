@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -17,8 +18,6 @@ use crate::types::{CapsuleReport, CapsuleSpec, FirecrackerConfig, ResourceViolat
 const WORKER_GUEST_PATH: &str = "/run/zeptokernel/worker";
 const GUEST_INIT_PATH: &str = "/sbin/init";
 const WORKER_PATH_FILE: &str = "/run/zeptokernel/worker.path";
-const WORKER_ARGS_FILE: &str = "/run/zeptokernel/worker.args";
-const WORKER_ENV_FILE: &str = "/run/zeptokernel/worker.env";
 const WORKSPACE_DEVICE_FILE: &str = "/run/zeptokernel/workspace.device";
 const WORKSPACE_PATH_FILE: &str = "/run/zeptokernel/workspace.path";
 const TMP_SIZE_FILE: &str = "/run/zeptokernel/tmp.size";
@@ -56,7 +55,7 @@ fn wait_for_socket(path: &Path) -> KernelResult<()> {
 }
 
 fn build_boot_args() -> String {
-    "console=ttyS0 reboot=k panic=1 root=/dev/vda rw init=/sbin/init".to_string()
+    format!("console=ttyS0 reboot=k panic=1 root=/dev/vda rw init={GUEST_INIT_PATH}")
 }
 
 fn write_nul_delimited_strings(path: &Path, values: &[String]) -> KernelResult<()> {
@@ -67,6 +66,28 @@ fn write_nul_delimited_strings(path: &Path, values: &[String]) -> KernelResult<(
     }
     std::fs::write(path, bytes)
         .map_err(|e| KernelError::SpawnFailed(format!("write {}: {e}", path.display())))
+}
+
+fn resolve_host_binary(binary: &str) -> KernelResult<PathBuf> {
+    let path = Path::new(binary);
+    if path.is_absolute() || binary.contains(std::path::MAIN_SEPARATOR) {
+        return Ok(path.to_path_buf());
+    }
+
+    let path_env = std::env::var_os("PATH").ok_or_else(|| {
+        KernelError::SpawnFailed(format!("resolve worker binary {binary}: PATH is not set"))
+    })?;
+
+    for dir in std::env::split_paths(&path_env) {
+        let candidate = dir.join(binary);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    Err(KernelError::SpawnFailed(format!(
+        "resolve worker binary {binary}: not found in PATH"
+    )))
 }
 
 fn mount_loop_image(image: &Path, mount_point: &Path) -> KernelResult<()> {
@@ -106,6 +127,7 @@ fn stage_firecracker_payload(
 ) -> KernelResult<()> {
     let mount_point = state_dir.join("rootfs_mount");
     mount_loop_image(rootfs_image, &mount_point)?;
+    let host_binary = resolve_host_binary(binary)?;
 
     let result = (|| -> KernelResult<()> {
         let stage_dir = mount_point.join("run/zeptokernel");
@@ -117,23 +139,24 @@ fn stage_firecracker_payload(
         // Use symlink_metadata to avoid following symlinks that resolve to absolute
         // paths outside the mount point (e.g. /bin/cat -> /bin/busybox).
         let guest_worker_path = {
-            let rootfs_binary = mount_point.join(binary.trim_start_matches('/'));
-            if std::fs::symlink_metadata(&rootfs_binary).is_ok() {
-                binary.to_string()
+            let rootfs_binary =
+                mount_point.join(host_binary.to_string_lossy().trim_start_matches('/'));
+            if host_binary.is_absolute() && std::fs::symlink_metadata(&rootfs_binary).is_ok() {
+                host_binary.to_string_lossy().to_string()
             } else {
                 let worker_dest = stage_dir.join("worker");
-                std::fs::copy(binary, &worker_dest)
+                std::fs::copy(&host_binary, &worker_dest)
                     .map_err(|e| KernelError::SpawnFailed(format!("copy worker binary: {e}")))?;
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(
-                        &worker_dest,
-                        std::fs::Permissions::from_mode(0o755),
-                    )
-                    .map_err(|e| {
-                        KernelError::SpawnFailed(format!("chmod {}: {e}", worker_dest.display()))
-                    })?;
+                    std::fs::set_permissions(&worker_dest, std::fs::Permissions::from_mode(0o755))
+                        .map_err(|e| {
+                            KernelError::SpawnFailed(format!(
+                                "chmod {}: {e}",
+                                worker_dest.display()
+                            ))
+                        })?;
                 }
                 WORKER_GUEST_PATH.to_string()
             }
@@ -197,6 +220,119 @@ fn stage_firecracker_payload(
     result
 }
 
+/// Connect to vsock ports using blocking I/O. Returns std UnixStreams
+/// (set to non-blocking before return for tokio compatibility).
+fn blocking_vsock_connect(
+    vsock_socket: &Path,
+) -> KernelResult<(
+    std::os::unix::net::UnixStream,
+    std::os::unix::net::UnixStream,
+    std::os::unix::net::UnixStream,
+    std::os::unix::net::UnixStream,
+    Option<String>,
+)> {
+    use crate::vsock;
+    use std::io::Read;
+
+    let connect_port = |port: u32| -> KernelResult<std::os::unix::net::UnixStream> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            match try_blocking_connect(vsock_socket, port) {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    if Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
+        }
+    };
+
+    let stdin = connect_port(vsock::PORT_STDIN)?;
+    let stdout = connect_port(vsock::PORT_STDOUT)?;
+    let stderr = connect_port(vsock::PORT_STDERR)?;
+    let mut control = connect_port(vsock::PORT_CONTROL)?;
+
+    // Read READY line from control channel.
+    control
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .map_err(|e| KernelError::Transport(format!("set read timeout: {e}")))?;
+    let mut bytes = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        let n = control
+            .read(&mut byte)
+            .map_err(|e| KernelError::Transport(format!("control read: {e}")))?;
+        if n == 0 || byte[0] == b'\n' {
+            break;
+        }
+        bytes.push(byte[0]);
+    }
+    control
+        .set_read_timeout(None)
+        .map_err(|e| KernelError::Transport(format!("clear read timeout: {e}")))?;
+
+    let ready = if bytes.is_empty() {
+        None
+    } else {
+        Some(
+            String::from_utf8(bytes)
+                .map_err(|e| KernelError::Transport(format!("control utf8: {e}")))?,
+        )
+    };
+
+    // Set all streams to non-blocking for tokio compatibility.
+    for stream in [&stdin, &stdout, &stderr, &control] {
+        stream
+            .set_nonblocking(true)
+            .map_err(|e| KernelError::Transport(format!("set nonblocking: {e}")))?;
+    }
+
+    Ok((stdin, stdout, stderr, control, ready))
+}
+
+fn try_blocking_connect(
+    vsock_socket: &Path,
+    port: u32,
+) -> KernelResult<std::os::unix::net::UnixStream> {
+    use crate::vsock;
+    use std::io::{Read, Write};
+
+    let mut stream = std::os::unix::net::UnixStream::connect(vsock_socket)
+        .map_err(|e| KernelError::Transport(format!("vsock connect: {e}")))?;
+
+    let req = vsock::connect_request(port);
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| KernelError::Transport(format!("vsock write CONNECT: {e}")))?;
+
+    // Read response byte by byte.
+    let mut line = Vec::new();
+    loop {
+        let mut byte = [0u8; 1];
+        let n = stream
+            .read(&mut byte)
+            .map_err(|e| KernelError::Transport(format!("vsock read response: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        line.push(byte[0]);
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+
+    let response = String::from_utf8_lossy(&line).to_string();
+    if !vsock::is_connect_ok(&response) {
+        return Err(KernelError::Transport(format!(
+            "vsock CONNECT {port} failed: {response}"
+        )));
+    }
+
+    Ok(stream)
+}
+
 fn control_message(signal: Signal) -> String {
     match signal {
         Signal::Terminate => "TERMINATE\n".to_string(),
@@ -204,6 +340,7 @@ fn control_message(signal: Signal) -> String {
     }
 }
 
+#[derive(Clone, Copy)]
 enum ControlStatus {
     Exited(i32),
     Signaled(i32),
@@ -222,41 +359,6 @@ fn parse_exit_status(line: &str) -> ControlStatus {
         }
     }
     ControlStatus::Unknown
-}
-
-async fn read_control_line(
-    stream: &mut UnixStream,
-    timeout: std::time::Duration,
-) -> KernelResult<Option<String>> {
-    use tokio::io::AsyncReadExt;
-
-    tokio::time::timeout(timeout, async {
-        let mut bytes = Vec::new();
-        loop {
-            let mut byte = [0_u8; 1];
-            let read = stream
-                .read(&mut byte)
-                .await
-                .map_err(|e| KernelError::Transport(format!("control read: {e}")))?;
-            if read == 0 {
-                break;
-            }
-            if byte[0] == b'\n' {
-                break;
-            }
-            bytes.push(byte[0]);
-        }
-
-        if bytes.is_empty() {
-            Ok(None)
-        } else {
-            String::from_utf8(bytes)
-                .map(Some)
-                .map_err(|e| KernelError::Transport(format!("control utf8: {e}")))
-        }
-    })
-    .await
-    .map_err(|_| KernelError::Transport("control channel timeout".into()))?
 }
 
 pub struct FirecrackerBackend;
@@ -282,7 +384,9 @@ impl Backend for FirecrackerBackend {
             config,
             state_dir,
             fc_process: None,
-            control: None,
+            control_write_fd: None,
+            control_status: Arc::new(Mutex::new(None)),
+            worker_exited: Arc::new(AtomicBool::new(false)),
             started_at: Instant::now(),
             killed_by: Arc::new(Mutex::new(None)),
             timeout_cancel: None,
@@ -295,7 +399,9 @@ pub struct FirecrackerCapsule {
     config: FirecrackerConfig,
     state_dir: PathBuf,
     fc_process: Option<std::process::Child>,
-    control: Option<UnixStream>,
+    control_write_fd: Option<i32>,
+    control_status: Arc<Mutex<Option<ControlStatus>>>,
+    worker_exited: Arc<AtomicBool>,
     started_at: Instant,
     killed_by: Arc<Mutex<Option<ResourceViolation>>>,
     timeout_cancel: Option<oneshot::Sender<()>>,
@@ -309,6 +415,24 @@ impl FirecrackerCapsule {
                 .map_err(|e| KernelError::Transport(format!("kill firecracker: {e}")))?;
         }
         Ok(())
+    }
+
+    fn cleanup_failed_spawn(&mut self) {
+        if let Some(cancel) = self.timeout_cancel.take() {
+            let _ = cancel.send(());
+        }
+        if let Some(fd) = self.control_write_fd.take() {
+            unsafe { libc::close(fd) };
+        }
+        if let Some(ref mut child) = self.fc_process {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.fc_process = None;
+        self.worker_exited.store(false, Ordering::Release);
+        if let Ok(mut status) = self.control_status.lock() {
+            *status = None;
+        }
     }
 }
 
@@ -327,6 +451,12 @@ impl CapsuleHandle for FirecrackerCapsule {
         let vsock_socket = vsock_socket_path(&self.state_dir);
         let serial_log = serial_log_path(&self.state_dir);
         let rootfs_copy = rootfs_copy_path(&self.state_dir);
+
+        if self.fc_process.is_some() || self.control_write_fd.is_some() {
+            return Err(KernelError::InvalidState(
+                "capsule already has a running child".into(),
+            ));
+        }
 
         std::fs::copy(&self.config.rootfs_path, &rootfs_copy)
             .map_err(|e| KernelError::SpawnFailed(format!("copy rootfs: {e}")))?;
@@ -374,226 +504,263 @@ impl CapsuleHandle for FirecrackerCapsule {
             .map_err(|e| KernelError::SpawnFailed(format!("start firecracker: {e}")))?;
         self.fc_process = Some(fc_child);
 
-        wait_for_socket(&api_socket)?;
+        let spawn_result: KernelResult<CapsuleChild> = (|| {
+            wait_for_socket(&api_socket)?;
 
-        let vcpus = self.config.effective_vcpus(&self.spec.limits);
-        let memory_mib = self.config.effective_memory_mib(&self.spec.limits);
+            let vcpus = self.config.effective_vcpus(&self.spec.limits);
+            let memory_mib = self.config.effective_memory_mib(&self.spec.limits);
 
-        // Run async Firecracker API calls on a dedicated thread to avoid
-        // "cannot block_on from within a runtime" when called from async context.
-        let kernel_path = self.config.kernel_path.to_string_lossy().to_string();
-        let enable_network = self.config.enable_network;
-        let tap_name = self.config.tap_name.clone();
-        let rootfs_str = rootfs_copy.to_string_lossy().to_string();
-        let ws_str = ws_image.to_string_lossy().to_string();
-        let vsock_str = vsock_socket.to_string_lossy().to_string();
-        let api_sock = api_socket.clone();
+            // Run async Firecracker API calls on a dedicated thread to avoid
+            // "cannot block_on from within a runtime" when called from async context.
+            let kernel_path = self.config.kernel_path.to_string_lossy().to_string();
+            let enable_network = self.config.enable_network;
+            let tap_name = self.config.tap_name.clone();
+            let rootfs_str = rootfs_copy.to_string_lossy().to_string();
+            let ws_str = ws_image.to_string_lossy().to_string();
+            let vsock_str = vsock_socket.to_string_lossy().to_string();
+            let api_sock = api_socket.clone();
 
-        let configure_result: Result<_, KernelError> = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| KernelError::SpawnFailed(format!("create runtime: {e}")))?;
-            rt.block_on(async {
-                api::put_expect_ok(
-                    &api_sock,
-                    "/machine-config",
-                    &api::machine_config_json(vcpus, memory_mib),
-                )
-                .await?;
-
-                api::put_expect_ok(
-                    &api_sock,
-                    "/boot-source",
-                    &api::boot_source_json(&kernel_path, &build_boot_args()),
-                )
-                .await?;
-
-                api::put_expect_ok(
-                    &api_sock,
-                    "/drives/rootfs",
-                    &api::drive_json("rootfs", &rootfs_str, true, false),
-                )
-                .await?;
-
-                api::put_expect_ok(
-                    &api_sock,
-                    "/drives/workspace",
-                    &api::drive_json("workspace", &ws_str, false, false),
-                )
-                .await?;
-
-                api::put_expect_ok(
-                    &api_sock,
-                    "/vsock",
-                    &api::vsock_json("vsock0", &vsock_str, vsock::GUEST_CID),
-                )
-                .await?;
-
-                if enable_network {
-                    if let Some(ref tap) = tap_name {
-                        api::put_expect_ok(
-                            &api_sock,
-                            "/network-interfaces/eth0",
-                            &api::network_interface_json("eth0", tap),
-                        )
-                        .await?;
-                    }
-                }
-
-                api::put_expect_ok(&api_sock, "/actions", &api::action_json("InstanceStart"))
+            let configure_result: Result<_, KernelError> = std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| KernelError::SpawnFailed(format!("create runtime: {e}")))?;
+                rt.block_on(async {
+                    api::put_expect_ok(
+                        &api_sock,
+                        "/machine-config",
+                        &api::machine_config_json(vcpus, memory_mib),
+                    )
                     .await?;
-                Ok::<(), KernelError>(())
-            })
-        })
-        .join()
-        .map_err(|_| KernelError::SpawnFailed("configure thread panicked".into()))?;
-        configure_result?;
 
-        wait_for_socket(&vsock_socket)?;
+                    api::put_expect_ok(
+                        &api_sock,
+                        "/boot-source",
+                        &api::boot_source_json(&kernel_path, &build_boot_args()),
+                    )
+                    .await?;
 
-        let vsock_sock2 = vsock_socket.clone();
-        let connect_result = std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| KernelError::SpawnFailed(format!("create runtime: {e}")))?;
-            rt.block_on(async {
-                let stdin = vsock::connect(&vsock_sock2, vsock::PORT_STDIN).await?;
-                let stdout = vsock::connect(&vsock_sock2, vsock::PORT_STDOUT).await?;
-                let stderr = vsock::connect(&vsock_sock2, vsock::PORT_STDERR).await?;
-                let mut control = vsock::connect(&vsock_sock2, vsock::PORT_CONTROL).await?;
+                    api::put_expect_ok(
+                        &api_sock,
+                        "/drives/rootfs",
+                        &api::drive_json("rootfs", &rootfs_str, true, false),
+                    )
+                    .await?;
 
-                // Read READY on same runtime where the streams were created.
-                let ready = read_control_line(
-                    &mut control,
-                    std::time::Duration::from_secs(30),
-                )
-                .await?;
+                    api::put_expect_ok(
+                        &api_sock,
+                        "/drives/workspace",
+                        &api::drive_json("workspace", &ws_str, false, false),
+                    )
+                    .await?;
 
-                // Convert tokio streams to raw fds for cross-runtime use.
-                use std::os::fd::IntoRawFd;
-                let to_fd = |s: UnixStream| -> KernelResult<i32> {
-                    s.into_std()
-                        .map(|s| s.into_raw_fd())
-                        .map_err(|e| KernelError::Transport(format!("into_std: {e}")))
-                };
-                let stdin_fd = to_fd(stdin)?;
-                let stdout_fd = to_fd(stdout)?;
-                let stderr_fd = to_fd(stderr)?;
-                let control_fd = to_fd(control)?;
+                    api::put_expect_ok(
+                        &api_sock,
+                        "/vsock",
+                        &api::vsock_json("vsock0", &vsock_str, vsock::GUEST_CID),
+                    )
+                    .await?;
 
-                Ok::<_, KernelError>((stdin_fd, stdout_fd, stderr_fd, control_fd, ready))
-            })
-        })
-        .join()
-        .map_err(|_| KernelError::SpawnFailed("connect thread panicked".into()))?;
-        let (stdin_fd, stdout_fd, stderr_fd, control_fd, ready) = connect_result?;
-
-        // Re-wrap raw fds as tokio UnixStreams on whatever runtime is available.
-        use std::os::fd::FromRawFd;
-        let map_io = |e: std::io::Error| KernelError::Transport(format!("from_std: {e}"));
-        let stdin_stream = unsafe {
-            UnixStream::from_std(std::os::unix::net::UnixStream::from_raw_fd(stdin_fd))
-                .map_err(map_io)?
-        };
-        let stdout_stream = unsafe {
-            UnixStream::from_std(std::os::unix::net::UnixStream::from_raw_fd(stdout_fd))
-                .map_err(map_io)?
-        };
-        let stderr_stream = unsafe {
-            UnixStream::from_std(std::os::unix::net::UnixStream::from_raw_fd(stderr_fd))
-                .map_err(map_io)?
-        };
-        let control_stream = unsafe {
-            UnixStream::from_std(std::os::unix::net::UnixStream::from_raw_fd(control_fd))
-                .map_err(map_io)?
-        };
-        if ready.as_deref() != Some("READY") {
-            return Err(KernelError::SpawnFailed(format!(
-                "zk-init sent unexpected readiness: {}",
-                ready.unwrap_or_default()
-            )));
-        }
-        self.control = Some(control_stream);
-
-        let killed_by = Arc::clone(&self.killed_by);
-        let timeout_sec = self.spec.limits.timeout_sec;
-        let fc_pid = self.fc_process.as_ref().map(|child| child.id());
-        if timeout_sec > 0 {
-            let (tx, mut rx) = oneshot::channel::<()>();
-            self.timeout_cancel = Some(tx);
-            std::thread::spawn(move || {
-                let deadline = Instant::now() + std::time::Duration::from_secs(timeout_sec);
-                loop {
-                    if rx.try_recv().is_ok() || Instant::now() >= deadline {
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(250));
-                }
-                if Instant::now() >= deadline {
-                    *killed_by.lock().unwrap() = Some(ResourceViolation::WallClock);
-                    if let Some(pid) = fc_pid {
-                        unsafe {
-                            libc::kill(pid as i32, libc::SIGKILL);
+                    if enable_network {
+                        if let Some(ref tap) = tap_name {
+                            api::put_expect_ok(
+                                &api_sock,
+                                "/network-interfaces/eth0",
+                                &api::network_interface_json("eth0", tap),
+                            )
+                            .await?;
                         }
                     }
-                }
+
+                    api::put_expect_ok(&api_sock, "/actions", &api::action_json("InstanceStart"))
+                        .await?;
+                    Ok::<(), KernelError>(())
+                })
+            })
+            .join()
+            .map_err(|_| KernelError::SpawnFailed("configure thread panicked".into()))?;
+            configure_result?;
+
+            wait_for_socket(&vsock_socket)?;
+
+            // Connect to vsock ports using blocking I/O to avoid cross-runtime issues.
+            let connect_result = blocking_vsock_connect(&vsock_socket)?;
+            let (stdin_std, stdout_std, stderr_std, control_std, ready) = connect_result;
+
+            // Wrap blocking std streams as tokio UnixStreams. from_std expects
+            // non-blocking mode — the streams are already non-blocking from the
+            // blocking_vsock_connect helper (it sets non-blocking before returning).
+            let map_io = |e: std::io::Error| KernelError::Transport(format!("from_std: {e}"));
+            let stdin_stream = UnixStream::from_std(stdin_std).map_err(map_io)?;
+            let stdout_stream = UnixStream::from_std(stdout_std).map_err(map_io)?;
+            let stderr_stream = UnixStream::from_std(stderr_std).map_err(map_io)?;
+            if ready.as_deref() != Some("READY") {
+                drop(control_std);
+                return Err(KernelError::SpawnFailed(format!(
+                    "zk-init sent unexpected readiness: {}",
+                    ready.unwrap_or_default()
+                )));
+            }
+
+            use std::os::fd::IntoRawFd;
+            let control_fd = control_std.into_raw_fd();
+            let control_write_fd = unsafe { libc::dup(control_fd) };
+            if control_write_fd < 0 {
+                unsafe { libc::close(control_fd) };
+                return Err(KernelError::Transport(format!(
+                    "dup control fd: {}",
+                    std::io::Error::last_os_error()
+                )));
+            }
+            self.control_write_fd = Some(control_write_fd);
+
+            let control_status = Arc::clone(&self.control_status);
+            let worker_exited = Arc::clone(&self.worker_exited);
+            std::thread::spawn(move || {
+                use std::os::fd::FromRawFd;
+                use tokio::io::{AsyncBufReadExt, BufReader};
+
+                let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                else {
+                    return;
+                };
+
+                rt.block_on(async move {
+                    let control_read_stream = unsafe {
+                        match UnixStream::from_std(std::os::unix::net::UnixStream::from_raw_fd(
+                            control_fd,
+                        )) {
+                            Ok(s) => s,
+                            Err(_) => return,
+                        }
+                    };
+                    let mut reader = BufReader::new(control_read_stream);
+                    loop {
+                        let mut line = String::new();
+                        let read = match reader.read_line(&mut line).await {
+                            Ok(read) => read,
+                            Err(_) => break,
+                        };
+                        if read == 0 {
+                            break;
+                        }
+
+                        match parse_exit_status(&line) {
+                            ControlStatus::Exited(code) => {
+                                if let Ok(mut status) = control_status.lock() {
+                                    *status = Some(ControlStatus::Exited(code));
+                                }
+                                worker_exited.store(true, Ordering::Release);
+                                break;
+                            }
+                            ControlStatus::Signaled(signal) => {
+                                if let Ok(mut status) = control_status.lock() {
+                                    *status = Some(ControlStatus::Signaled(signal));
+                                }
+                                worker_exited.store(true, Ordering::Release);
+                                break;
+                            }
+                            ControlStatus::Unknown => {}
+                        }
+                    }
+                });
             });
+
+            let killed_by = Arc::clone(&self.killed_by);
+            let worker_exited = Arc::clone(&self.worker_exited);
+            let timeout_sec = self.spec.limits.timeout_sec;
+            let fc_pid = self.fc_process.as_ref().map(|child| child.id());
+            if timeout_sec > 0 {
+                let (tx, mut rx) = oneshot::channel::<()>();
+                self.timeout_cancel = Some(tx);
+                std::thread::spawn(move || {
+                    let deadline = Instant::now() + std::time::Duration::from_secs(timeout_sec);
+                    loop {
+                        if rx.try_recv().is_ok()
+                            || worker_exited.load(Ordering::Acquire)
+                            || Instant::now() >= deadline
+                        {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                    if Instant::now() >= deadline && !worker_exited.load(Ordering::Acquire) {
+                        *killed_by.lock().unwrap() = Some(ResourceViolation::WallClock);
+                        if let Some(pid) = fc_pid {
+                            unsafe {
+                                libc::kill(pid as i32, libc::SIGKILL);
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Avoid into_split() — dropping OwnedWriteHalf calls shutdown(SHUT_WR)
+            // which can cause Firecracker's vsock proxy to close the entire connection.
+            // Box the full streams instead; UnixStream implements both AsyncRead and AsyncWrite.
+            let pid = self
+                .fc_process
+                .as_ref()
+                .map(|child| child.id())
+                .unwrap_or_default();
+
+            Ok(CapsuleChild {
+                stdin: Box::pin(stdin_stream),
+                stdout: Box::pin(stdout_stream),
+                stderr: Box::pin(stderr_stream),
+                pid,
+            })
+        })();
+
+        if spawn_result.is_err() {
+            self.cleanup_failed_spawn();
         }
 
-        let (stdout_read, _) = tokio::io::split(stdout_stream);
-        let (stderr_read, _) = tokio::io::split(stderr_stream);
-        let (_, stdin_write) = tokio::io::split(stdin_stream);
-        let pid = self
-            .fc_process
-            .as_ref()
-            .map(|child| child.id())
-            .unwrap_or_default();
-
-        Ok(CapsuleChild {
-            stdin: Box::pin(stdin_write),
-            stdout: Box::pin(stdout_read),
-            stderr: Box::pin(stderr_read),
-            pid,
-        })
+        spawn_result
     }
 
     fn kill(&mut self, signal: Signal) -> KernelResult<()> {
         let message = control_message(signal);
 
-        let control_result = if let Some(mut control) = self.control.take() {
-            let result = std::thread::spawn(move || {
+        let control_result = if let Some(fd) = self.control_write_fd {
+            // Dup the fd so the write thread owns its own copy.
+            // The original fd stays in self for potential future kill() calls.
+            let write_fd = unsafe { libc::dup(fd) };
+            if write_fd < 0 {
+                return Err(KernelError::Transport(format!(
+                    "dup control fd for kill: {}",
+                    std::io::Error::last_os_error()
+                )));
+            }
+            std::thread::spawn(move || {
+                use std::os::fd::FromRawFd;
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .map_err(|e| KernelError::Transport(format!("create runtime: {e}")))?;
-                let write_result = rt.block_on(async {
+                rt.block_on(async {
+                    let stream = unsafe {
+                        UnixStream::from_std(std::os::unix::net::UnixStream::from_raw_fd(write_fd))
+                            .map_err(|e| KernelError::Transport(format!("from_std: {e}")))?
+                    };
                     use tokio::io::AsyncWriteExt;
+                    let (_, mut writer) = tokio::io::split(stream);
                     match tokio::time::timeout(
                         std::time::Duration::from_secs(2),
-                        control.write_all(message.as_bytes()),
+                        writer.write_all(message.as_bytes()),
                     )
                     .await
                     {
                         Ok(result) => result
                             .map_err(|e| KernelError::Transport(format!("control write: {e}"))),
-                        Err(_) => {
-                            Err(KernelError::Transport("control channel timeout".into()))
-                        }
+                        Err(_) => Err(KernelError::Transport("control channel timeout".into())),
                     }
-                });
-                Ok::<_, KernelError>((write_result, control))
+                })
             })
             .join()
-            .map_err(|_| KernelError::Transport("kill thread panicked".into()))?;
-            match result {
-                Ok((write_result, control)) => {
-                    self.control = Some(control);
-                    write_result
-                }
-                Err(e) => Err(e),
-            }
+            .map_err(|_| KernelError::Transport("kill thread panicked".into()))?
         } else {
             Err(KernelError::InvalidState(
                 "firecracker control channel is not connected".into(),
@@ -627,35 +794,20 @@ impl CapsuleHandle for FirecrackerCapsule {
         if let Some(cancel) = self.timeout_cancel.take() {
             let _ = cancel.send(());
         }
-
-        let mut exit_code = None;
-        let mut exit_signal = None;
-        if let Some(mut control) = self.control.take() {
-            let line_result = std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|e| KernelError::Transport(format!("create runtime: {e}")))?;
-                rt.block_on(read_control_line(
-                    &mut control,
-                    std::time::Duration::from_secs(2),
-                ))
-            })
-            .join()
-            .map_err(|_| KernelError::Transport("destroy read thread panicked".into()))?;
-            if let Some(line) = line_result? {
-                match parse_exit_status(&line) {
-                    ControlStatus::Exited(code) => exit_code = Some(code),
-                    ControlStatus::Signaled(signal) => exit_signal = Some(signal),
-                    ControlStatus::Unknown => {}
-                }
-            }
+        if let Some(fd) = self.control_write_fd.take() {
+            unsafe { libc::close(fd) };
         }
 
         if let Some(ref mut child) = self.fc_process {
             let _ = child.kill();
             let _ = child.wait();
         }
+
+        let (exit_code, exit_signal) = match self.control_status.lock().unwrap().take() {
+            Some(ControlStatus::Exited(code)) => (Some(code), None),
+            Some(ControlStatus::Signaled(signal)) => (None, Some(signal)),
+            _ => (None, None),
+        };
 
         let wall_time = self.started_at.elapsed();
         let killed_by = self.killed_by.lock().unwrap().take();
@@ -841,6 +993,41 @@ mod tests {
     #[test]
     fn worker_guest_path_is_fixed() {
         assert_eq!(WORKER_GUEST_PATH, "/run/zeptokernel/worker");
+    }
+
+    #[test]
+    fn resolve_absolute_binary_preserves_path() {
+        assert_eq!(
+            resolve_host_binary("/bin/sh").unwrap(),
+            PathBuf::from("/bin/sh")
+        );
+    }
+
+    #[test]
+    fn resolve_relative_binary_uses_path_lookup() {
+        let temp_dir = std::env::temp_dir().join(format!("zk-fc-bin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let binary_path = temp_dir.join("fc-echo");
+        std::fs::write(&binary_path, b"#!/bin/sh\n").unwrap();
+
+        let old_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", &temp_dir);
+        }
+        let resolved = resolve_host_binary("fc-echo").unwrap();
+        if let Some(old_path) = old_path {
+            unsafe {
+                std::env::set_var("PATH", old_path);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("PATH");
+            }
+        }
+
+        assert_eq!(resolved, binary_path);
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]

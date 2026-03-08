@@ -72,11 +72,7 @@ async fn process_capsule_stderr_captured() {
     let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec::default()).unwrap();
 
     let mut child = capsule
-        .spawn(
-            "/bin/sh",
-            &["-c", "echo hello >&2"],
-            HashMap::new(),
-        )
+        .spawn("/bin/sh", &["-c", "echo hello >&2"], HashMap::new())
         .unwrap();
 
     let mut buf = Vec::new();

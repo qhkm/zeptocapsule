@@ -4,7 +4,7 @@ use std::process::Command;
 #[cfg(target_os = "linux")]
 use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "linux")]
-use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
+use std::os::fd::{FromRawFd, RawFd};
 #[cfg(target_os = "linux")]
 use std::process::Stdio;
 
@@ -248,7 +248,6 @@ fn run_fc_init_shim() -> Result<(), String> {
             )),
         }
     }
-
 }
 
 pub fn run_init_shim() -> Result<(), String> {

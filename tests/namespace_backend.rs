@@ -114,7 +114,7 @@ async fn namespace_hardened_hides_host_filesystem() {
     .unwrap();
 
     // Try to read /etc/hostname from host — should fail in pivoted root
-    let child = capsule
+    let mut child = capsule
         .spawn(
             "/bin/sh",
             &[
@@ -162,7 +162,7 @@ async fn namespace_hardened_has_dev_null() {
     })
     .unwrap();
 
-    let child = capsule
+    let mut child = capsule
         .spawn(
             "/bin/sh",
             &["-c", "echo test > /dev/null && echo OK || echo FAIL"],
