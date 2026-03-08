@@ -13,6 +13,10 @@ mod seccomp;
 mod firecracker_api;
 #[cfg(target_os = "linux")]
 mod vsock;
+#[cfg(target_os = "linux")]
+mod firecracker;
+#[cfg(target_os = "linux")]
+mod workspace_image;
 mod rootfs;
 
 use backend::{Backend, CapsuleHandle, KernelResult};
@@ -67,9 +71,16 @@ pub fn create(spec: CapsuleSpec) -> KernelResult<Capsule> {
             }
         }
         types::Isolation::Firecracker => {
-            return Err(KernelError::NotSupported(
-                "firecracker backend is not implemented".into(),
-            ));
+            #[cfg(target_os = "linux")]
+            {
+                Box::new(firecracker::FirecrackerBackend)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                return Err(KernelError::NotSupported(
+                    "firecracker isolation requires Linux".into(),
+                ));
+            }
         }
     };
 
