@@ -1,0 +1,19 @@
+[package]
+name = "zk-guest"
+description = "ZeptoKernel guest agent — runs inside the capsule, bridges host commands to worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zk-guest"
+path = "src/main.rs"
+
+[dependencies]
+zk-proto = { path = "../zk-proto" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }

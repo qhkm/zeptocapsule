@@ -1,0 +1,11 @@
+[package]
+name = "zk-proto"
+description = "ZeptoKernel host↔guest protocol — message types, event schema, job spec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
