@@ -28,6 +28,7 @@ pub struct RootfsLayout {
     pub devices: Vec<DeviceNode>,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn rootfs_layout() -> RootfsLayout {
     RootfsLayout {
         bind_mounts: vec![

@@ -47,6 +47,7 @@ pub fn default_init_binary() -> KernelResult<PathBuf> {
 }
 
 pub fn create(spec: CapsuleSpec) -> KernelResult<Capsule> {
+    spec.validate().map_err(KernelError::InvalidState)?;
     let backend: Box<dyn Backend> = match spec.isolation {
         types::Isolation::Process => Box::new(process::ProcessBackend),
         types::Isolation::Namespace => {

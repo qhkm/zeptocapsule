@@ -18,6 +18,20 @@ pub struct CapsuleSpec {
     pub security_overrides: SecurityOverrides,
 }
 
+impl CapsuleSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        match (self.isolation, self.security) {
+            (Isolation::Process, SecurityProfile::Hardened) => {
+                Err("Hardened security profile requires Namespace isolation".into())
+            }
+            (Isolation::Namespace, SecurityProfile::Dev) => {
+                Err("Dev security profile only works with Process isolation".into())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 impl Default for CapsuleSpec {
     fn default() -> Self {
         Self {
@@ -150,5 +164,45 @@ mod tests {
         let rlimits = RLimits::from(&limits);
         assert_eq!(rlimits.max_memory_bytes, Some(512 * 1024 * 1024));
         assert_eq!(rlimits.max_cpu_seconds, Some(60));
+    }
+
+    #[test]
+    fn validate_rejects_hardened_with_process() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Process,
+            security: SecurityProfile::Hardened,
+            ..Default::default()
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_dev_with_namespace() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Namespace,
+            security: SecurityProfile::Dev,
+            ..Default::default()
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_standard_with_namespace() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Namespace,
+            security: SecurityProfile::Standard,
+            ..Default::default()
+        };
+        assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_dev_with_process() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Process,
+            security: SecurityProfile::Dev,
+            ..Default::default()
+        };
+        assert!(spec.validate().is_ok());
     }
 }
