@@ -9,5 +9,6 @@
 
 pub mod backend;
 pub mod capsule;
+pub mod process_backend;
 pub mod supervisor;
 pub mod vm_config;

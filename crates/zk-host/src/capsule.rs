@@ -4,6 +4,7 @@ use std::time::Instant;
 use zk_proto::CapsuleState;
 
 /// Runtime state for one execution capsule.
+#[derive(Clone)]
 pub struct Capsule {
     pub job_id: String,
     pub run_id: String,
