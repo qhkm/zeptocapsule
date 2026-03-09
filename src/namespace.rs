@@ -352,6 +352,7 @@ fn do_clone(
     if let Err(error) = write_uid_gid_maps(child_pid) {
         unsafe { libc::write(sync_w, [1_u8].as_ptr().cast(), 1) };
         let _ = nix::unistd::close(sync_w);
+        let _ = nix::unistd::close(diag_r);
         let _ = nix::sys::signal::kill(child_pid, nix::sys::signal::Signal::SIGKILL);
         let _ = waitpid(child_pid, None);
         return Err(error);
@@ -376,6 +377,7 @@ fn do_clone(
             if cgroup_required {
                 unsafe { libc::write(sync_w, [1_u8].as_ptr().cast(), 1) };
                 let _ = nix::unistd::close(sync_w);
+                let _ = nix::unistd::close(diag_r);
                 let _ = nix::sys::signal::kill(child_pid, nix::sys::signal::Signal::SIGKILL);
                 let _ = waitpid(child_pid, None);
                 return Err(std::io::Error::new(
