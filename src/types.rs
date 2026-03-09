@@ -173,6 +173,8 @@ pub struct CapsuleReport {
     pub wall_time: Duration,
     pub peak_memory_mib: Option<u64>,
     pub init_error: Option<String>,
+    pub actual_isolation: Option<Isolation>,
+    pub actual_security: Option<SecurityProfile>,
 }
 
 #[cfg(test)]
@@ -246,6 +248,14 @@ mod tests {
             ..Default::default()
         };
         assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn capsule_report_default_has_none_fields() {
+        let report = CapsuleReport::default();
+        assert!(report.init_error.is_none());
+        assert!(report.actual_isolation.is_none());
+        assert!(report.actual_security.is_none());
     }
 
     #[test]

@@ -250,6 +250,8 @@ impl CapsuleHandle for ProcessCapsule {
             wall_time: self.started_at.elapsed(),
             peak_memory_mib: None,
             init_error: None,
+            actual_isolation: Some(crate::types::Isolation::Process),
+            actual_security: Some(crate::types::SecurityProfile::Dev),
         })
     }
 }

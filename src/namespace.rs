@@ -204,6 +204,8 @@ impl CapsuleHandle for NamespaceCapsule {
             wall_time: self.started_at.elapsed(),
             peak_memory_mib,
             init_error,
+            actual_isolation: Some(crate::types::Isolation::Namespace),
+            actual_security: Some(self.spec.security),
         })
     }
 }

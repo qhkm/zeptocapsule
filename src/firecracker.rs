@@ -849,6 +849,8 @@ impl CapsuleHandle for FirecrackerCapsule {
             wall_time,
             peak_memory_mib: None,
             init_error: None,
+            actual_isolation: Some(crate::types::Isolation::Firecracker),
+            actual_security: Some(self.spec.security),
         })
     }
 }
