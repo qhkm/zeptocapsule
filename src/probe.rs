@@ -63,7 +63,7 @@ pub fn parse_kernel_version(text: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// Detects the CPU architecture of the current host.
-pub fn detect_arch() -> Arch {
+fn detect_arch() -> Arch {
     match std::env::consts::ARCH {
         "x86_64" => Arch::X86_64,
         "aarch64" => Arch::Aarch64,
@@ -99,7 +99,7 @@ fn read_kernel_version() -> Option<(u32, u32, u32)> {
 }
 
 /// Checks whether unprivileged user namespaces are available.
-pub fn probe_user_namespaces() -> bool {
+fn probe_user_namespaces() -> bool {
     #[cfg(target_os = "linux")]
     {
         // Try the sysctl first
@@ -107,8 +107,9 @@ pub fn probe_user_namespaces() -> bool {
         {
             return contents.trim() == "1";
         }
-        // Fall back: on many modern kernels the sysctl doesn't exist but
-        // user namespaces are enabled by default.
+        // Sysctl absent — most modern kernels enable user namespaces by default.
+        // A more thorough check would fork+unshare(CLONE_NEWUSER), but that's
+        // heavyweight for a non-destructive probe. Accept the false-positive risk.
         true
     }
     #[cfg(not(target_os = "linux"))]
@@ -130,11 +131,10 @@ fn probe_cgroup_v2() -> bool {
 }
 
 /// Checks whether seccomp filtering is supported via prctl(PR_GET_SECCOMP).
-pub fn probe_seccomp() -> bool {
+fn probe_seccomp() -> bool {
     #[cfg(target_os = "linux")]
     {
-        // PR_GET_SECCOMP = 21
-        let ret = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
+        let ret = unsafe { libc::prctl(libc::PR_GET_SECCOMP, 0, 0, 0, 0) };
         // Returns 0 (disabled) or 2 (filter mode) on success; -1 with EINVAL if unsupported.
         ret >= 0
     }
@@ -144,13 +144,24 @@ pub fn probe_seccomp() -> bool {
     }
 }
 
-/// Checks whether /dev/kvm is accessible.
+/// Checks whether /dev/kvm is accessible (readable+writable).
 fn probe_kvm() -> bool {
-    std::path::Path::new("/dev/kvm").exists()
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/kvm")
+            .is_ok()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
 }
 
-/// Searches for the firecracker binary in well-known locations and PATH.
-pub fn find_firecracker_bin() -> Option<PathBuf> {
+/// Searches for the firecracker binary in well-known locations.
+fn find_firecracker_bin() -> Option<PathBuf> {
     let candidates = [
         PathBuf::from("/usr/bin/firecracker"),
         PathBuf::from("/usr/local/bin/firecracker"),
@@ -159,16 +170,6 @@ pub fn find_firecracker_bin() -> Option<PathBuf> {
     for path in &candidates {
         if path.exists() {
             return Some(path.clone());
-        }
-    }
-
-    // Search PATH
-    if let Ok(path_var) = std::env::var("PATH") {
-        for dir in path_var.split(':') {
-            let candidate = PathBuf::from(dir).join("firecracker");
-            if candidate.exists() {
-                return Some(candidate);
-            }
         }
     }
 
