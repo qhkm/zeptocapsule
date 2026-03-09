@@ -1,6 +1,7 @@
 mod backend;
 mod init_shim;
 mod process;
+mod probe;
 mod types;
 
 #[cfg(target_os = "linux")]
@@ -28,6 +29,7 @@ pub use init_shim::{
     FcInitConfig, MountConfig, is_firecracker_mode, is_init, parse_fc_init_config, run_init_shim,
     setup_guest_fs,
 };
+pub use probe::{Arch, HostCapabilities, probe};
 pub use types::{
     CapsuleReport, CapsuleSpec, FirecrackerConfig, Isolation, RLimits, ResourceLimits,
     ResourceViolation, SecurityOverrides, SecurityProfile, Signal, WorkspaceConfig,
