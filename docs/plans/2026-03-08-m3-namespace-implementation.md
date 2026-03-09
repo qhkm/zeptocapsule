@@ -39,7 +39,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-IMAGE="zeptokernel-dev"
+IMAGE="zeptocapsule-dev"
 
 echo "==> Building Docker image..."
 docker build -t "$IMAGE" -f "$PROJECT_ROOT/Dockerfile.dev" "$PROJECT_ROOT"
@@ -146,13 +146,13 @@ This module manages the cgroup lifecycle for a single capsule.
 //! cgroup v2 lifecycle management for namespace capsules.
 //!
 //! Each capsule gets its own cgroup at:
-//!   /sys/fs/cgroup/zeptokernel/<job_id>/
+//!   /sys/fs/cgroup/zeptocapsule/<job_id>/
 
 use std::io;
 use std::path::PathBuf;
 use zk_proto::ResourceLimits;
 
-const CGROUP_ROOT: &str = "/sys/fs/cgroup/zeptokernel";
+const CGROUP_ROOT: &str = "/sys/fs/cgroup/zeptocapsule";
 
 pub struct Cgroup {
     path: PathBuf,
@@ -219,11 +219,11 @@ mod tests {
     #[test]
     fn test_cgroup_root_path() {
         let cg = Cgroup {
-            path: PathBuf::from("/sys/fs/cgroup/zeptokernel/test-job"),
+            path: PathBuf::from("/sys/fs/cgroup/zeptocapsule/test-job"),
         };
         assert_eq!(
             cg.path.join("memory.max"),
-            PathBuf::from("/sys/fs/cgroup/zeptokernel/test-job/memory.max")
+            PathBuf::from("/sys/fs/cgroup/zeptocapsule/test-job/memory.max")
         );
     }
 }
@@ -874,7 +874,7 @@ git commit -m "docs: mark M3 complete — namespace isolation with Docker, 24 te
 
 **`cgroup.procs write failed`**
 - cgroup v2 not mounted at `/sys/fs/cgroup`
-- Check: `ls /sys/fs/cgroup` inside Docker — should show `zeptokernel` can be created
+- Check: `ls /sys/fs/cgroup` inside Docker — should show `zeptocapsule` can be created
 - Fix: ensure Docker Desktop uses cgroup v2 (Settings → General → Use the new Virtualization framework)
 
 **`test_namespace_cancel` hangs**

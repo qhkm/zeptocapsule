@@ -1,8 +1,8 @@
-# ZeptoKernel Redesign — Implementation Plan
+# ZeptoCapsule Redesign — Implementation Plan
 
 > **For Codex:** Execute this plan task-by-task. Run `cargo test --workspace` after every change. Read the design doc at `docs/plans/2026-03-08-kernel-redesign.md` first.
 
-**Goal:** Collapse 3 crates (zk-proto, zk-host, zk-guest) into a single `zeptokernel` crate that exposes a thin sandbox API: create capsule, spawn process with raw pipes, enforce resource limits, kill, destroy. Remove all orchestration logic (supervisor, protocol, events, heartbeats).
+**Goal:** Collapse 3 crates (zk-proto, zk-host, zk-guest) into a single `zeptocapsule` crate that exposes a thin sandbox API: create capsule, spawn process with raw pipes, enforce resource limits, kill, destroy. Remove all orchestration logic (supervisor, protocol, events, heartbeats).
 
 **Architecture:** Single library crate with optional `zk-init` binary. ProcessBackend for macOS/dev (no isolation). NamespaceBackend for Linux (namespaces + cgroups). Caller (ZeptoPM) gets raw stdin/stdout pipes and talks directly to the worker.
 
@@ -46,15 +46,15 @@ Replace the workspace Cargo.toml with a single library crate. Keep the old crate
 
 ```toml
 [package]
-name = "zeptokernel"
+name = "zeptocapsule"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/qhkm/zeptokernel"
+repository = "https://github.com/qhkm/zeptocapsule"
 description = "Thin sandbox library — capsule creation, process isolation, resource enforcement"
 
 [lib]
-name = "zeptokernel"
+name = "zeptocapsule"
 path = "src/lib.rs"
 
 [[bin]]
@@ -88,7 +88,7 @@ serde_json = "1"
 **Step 2: Create `src/types.rs` with all public types**
 
 ```rust
-//! Public types for ZeptoKernel — capsule specification, resource limits, violations.
+//! Public types for ZeptoCapsule — capsule specification, resource limits, violations.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -188,7 +188,7 @@ pub struct CapsuleChild {
     pub pid: u32,
 }
 
-/// Errors from ZeptoKernel operations.
+/// Errors from ZeptoCapsule operations.
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {
     #[error("spawn failed: {0}")]
@@ -207,12 +207,12 @@ pub enum KernelError {
 **Step 3: Create `src/lib.rs` with module declarations and `create()` function**
 
 ```rust
-//! ZeptoKernel — thin sandbox library.
+//! ZeptoCapsule — thin sandbox library.
 //!
 //! Create isolated capsules, spawn processes with raw stdio pipes,
 //! enforce resource limits. No protocol, no supervision, no events.
 //!
-//! ZeptoKernel owns mechanisms. The caller (ZeptoPM) owns meaning.
+//! ZeptoCapsule owns mechanisms. The caller (ZeptoPM) owns meaning.
 
 pub mod types;
 mod process;
@@ -463,12 +463,12 @@ Actually, keep it in `process.rs` for now since ProcessBackend is the only worki
 Update `src/lib.rs`:
 
 ```rust
-//! ZeptoKernel — thin sandbox library.
+//! ZeptoCapsule — thin sandbox library.
 //!
 //! Create isolated capsules, spawn processes with raw stdio pipes,
 //! enforce resource limits. No protocol, no supervision, no events.
 //!
-//! ZeptoKernel owns mechanisms. The caller (ZeptoPM) owns meaning.
+//! ZeptoCapsule owns mechanisms. The caller (ZeptoPM) owns meaning.
 
 pub mod types;
 mod process;
@@ -526,17 +526,17 @@ fn sleep_binary() -> &'static str {
     "/bin/sleep"
 }
 
-fn default_spec() -> zeptokernel::CapsuleSpec {
-    zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Process,
-        workspace: zeptokernel::WorkspaceConfig::default(),
-        limits: zeptokernel::ResourceLimits::default(),
+fn default_spec() -> zeptocapsule::CapsuleSpec {
+    zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Process,
+        workspace: zeptocapsule::WorkspaceConfig::default(),
+        limits: zeptocapsule::ResourceLimits::default(),
     }
 }
 
 #[tokio::test]
 async fn test_create_and_spawn() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let child = capsule
         .spawn(echo_binary(), &["hello from capsule"], HashMap::new())
         .await
@@ -557,7 +557,7 @@ async fn test_create_and_spawn() {
 
 #[tokio::test]
 async fn test_spawn_with_env() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let mut env = HashMap::new();
     env.insert("MY_VAR".into(), "test_value".into());
 
@@ -578,7 +578,7 @@ async fn test_spawn_with_env() {
 
 #[tokio::test]
 async fn test_stdin_stdout_pipes() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let child = capsule
         .spawn(cat_binary(), &[], HashMap::new())
         .await
@@ -604,7 +604,7 @@ async fn test_stdin_stdout_pipes() {
 
 #[tokio::test]
 async fn test_kill_signal() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let _child = capsule
         .spawn(sleep_binary(), &["60"], HashMap::new())
         .await
@@ -623,16 +623,16 @@ async fn test_kill_signal() {
 
 #[tokio::test]
 async fn test_wall_clock_timeout() {
-    let spec = zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Process,
-        workspace: zeptokernel::WorkspaceConfig::default(),
-        limits: zeptokernel::ResourceLimits {
+    let spec = zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Process,
+        workspace: zeptocapsule::WorkspaceConfig::default(),
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 1, // 1 second timeout
             ..Default::default()
         },
     };
 
-    let mut capsule = zeptokernel::create(spec).unwrap();
+    let mut capsule = zeptocapsule::create(spec).unwrap();
     let _child = capsule
         .spawn(sleep_binary(), &["60"], HashMap::new())
         .await
@@ -648,19 +648,19 @@ async fn test_wall_clock_timeout() {
 
 #[tokio::test]
 async fn test_spawn_nonexistent_binary() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let result = capsule
         .spawn("/nonexistent/binary", &[], HashMap::new())
         .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(matches!(err, zeptokernel::KernelError::SpawnFailed(_)));
+    assert!(matches!(err, zeptocapsule::KernelError::SpawnFailed(_)));
 }
 
 #[tokio::test]
 async fn test_double_spawn_rejected() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let _child1 = capsule
         .spawn(sleep_binary(), &["60"], HashMap::new())
         .await
@@ -674,7 +674,7 @@ async fn test_double_spawn_rejected() {
     assert!(result.is_err());
     assert!(matches!(
         result.unwrap_err(),
-        zeptokernel::KernelError::SpawnFailed(_)
+        zeptocapsule::KernelError::SpawnFailed(_)
     ));
 
     capsule.kill(libc::SIGKILL).unwrap();
@@ -683,7 +683,7 @@ async fn test_double_spawn_rejected() {
 
 #[tokio::test]
 async fn test_destroy_without_spawn() {
-    let capsule = zeptokernel::create(default_spec()).unwrap();
+    let capsule = zeptocapsule::create(default_spec()).unwrap();
     let report = capsule.destroy().await.unwrap();
     assert!(report.exit_code.is_none());
     assert!(report.killed_by.is_none());
@@ -691,20 +691,20 @@ async fn test_destroy_without_spawn() {
 
 #[tokio::test]
 async fn test_namespace_not_supported_on_macos() {
-    let spec = zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Namespace,
-        workspace: zeptokernel::WorkspaceConfig::default(),
-        limits: zeptokernel::ResourceLimits::default(),
+    let spec = zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Namespace,
+        workspace: zeptocapsule::WorkspaceConfig::default(),
+        limits: zeptocapsule::ResourceLimits::default(),
     };
 
     // On macOS (or Linux without feature), this should return NotSupported
     #[cfg(not(all(target_os = "linux", feature = "namespace")))]
     {
-        let result = zeptokernel::create(spec);
+        let result = zeptocapsule::create(spec);
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            zeptokernel::KernelError::NotSupported(_)
+            zeptocapsule::KernelError::NotSupported(_)
         ));
     }
 }
@@ -740,13 +740,13 @@ Copy `crates/zk-host/src/cgroup.rs` to `src/cgroup.rs`. The only change: replace
 //! cgroup v2 lifecycle management for namespace capsules.
 //!
 //! Each capsule gets its own cgroup at:
-//!   /sys/fs/cgroup/zeptokernel/<job_id>/
+//!   /sys/fs/cgroup/zeptocapsule/<job_id>/
 
 use std::io;
 use std::path::PathBuf;
 use crate::types::ResourceLimits;
 
-const CGROUP_ROOT: &str = "/sys/fs/cgroup/zeptokernel";
+const CGROUP_ROOT: &str = "/sys/fs/cgroup/zeptocapsule";
 
 pub struct Cgroup {
     path: PathBuf,
@@ -763,7 +763,7 @@ impl Cgroup {
     /// Create a dummy Cgroup that silently fails all operations.
     pub fn dummy() -> Self {
         Self {
-            path: PathBuf::from("/sys/fs/cgroup/zeptokernel/_dummy_nonexistent"),
+            path: PathBuf::from("/sys/fs/cgroup/zeptocapsule/_dummy_nonexistent"),
         }
     }
 
@@ -818,11 +818,11 @@ mod tests {
     #[test]
     fn test_cgroup_path_construction() {
         let cg = Cgroup {
-            path: PathBuf::from("/sys/fs/cgroup/zeptokernel/test-capsule"),
+            path: PathBuf::from("/sys/fs/cgroup/zeptocapsule/test-capsule"),
         };
         assert_eq!(
             cg.path.join("memory.max"),
-            PathBuf::from("/sys/fs/cgroup/zeptokernel/test-capsule/memory.max")
+            PathBuf::from("/sys/fs/cgroup/zeptocapsule/test-capsule/memory.max")
         );
     }
 }
@@ -1257,7 +1257,7 @@ The mock worker is useful for testing. Port it but simplify — it no longer nee
 **Step 1: Create simplified mock worker**
 
 ```rust
-//! Mock worker for testing ZeptoKernel capsules.
+//! Mock worker for testing ZeptoCapsule capsules.
 //!
 //! Modes (via MOCK_MODE env var):
 //! - "complete" — write a line to stdout, exit 0
@@ -1348,7 +1348,7 @@ fn mock_worker_binary() -> String {
 
 #[tokio::test]
 async fn test_mock_worker_complete() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let mut env = HashMap::new();
     env.insert("MOCK_MODE".into(), "complete".into());
 
@@ -1368,7 +1368,7 @@ async fn test_mock_worker_complete() {
 
 #[tokio::test]
 async fn test_mock_worker_fail() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let mut env = HashMap::new();
     env.insert("MOCK_MODE".into(), "fail".into());
 
@@ -1390,16 +1390,16 @@ async fn test_mock_worker_fail() {
 
 #[tokio::test]
 async fn test_mock_worker_hang_killed_by_timeout() {
-    let spec = zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Process,
-        workspace: zeptokernel::WorkspaceConfig::default(),
-        limits: zeptokernel::ResourceLimits {
+    let spec = zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Process,
+        workspace: zeptocapsule::WorkspaceConfig::default(),
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 1,
             ..Default::default()
         },
     };
 
-    let mut capsule = zeptokernel::create(spec).unwrap();
+    let mut capsule = zeptocapsule::create(spec).unwrap();
     let mut env = HashMap::new();
     env.insert("MOCK_MODE".into(), "hang".into());
 
@@ -1427,7 +1427,7 @@ async fn test_mock_worker_hang_killed_by_timeout() {
 
 #[tokio::test]
 async fn test_mock_worker_echo_via_pipes() {
-    let mut capsule = zeptokernel::create(default_spec()).unwrap();
+    let mut capsule = zeptocapsule::create(default_spec()).unwrap();
     let mut env = HashMap::new();
     env.insert("MOCK_MODE".into(), "echo".into());
 
@@ -1519,7 +1519,7 @@ All tests must pass.
 
 ```bash
 git add -A
-git commit -m "refactor: remove old 3-crate structure — single zeptokernel crate complete"
+git commit -m "refactor: remove old 3-crate structure — single zeptocapsule crate complete"
 ```
 
 ---
@@ -1568,4 +1568,4 @@ git commit -m "docs: update for single-crate redesign"
 | 9 | Update docs | 0 (docs) |
 | **Total** | | **14 tests** |
 
-**After all tasks:** Single `zeptokernel` crate, ~14 tests, clean API: `create() → Capsule → spawn() → pipes → kill() → destroy()`.
+**After all tasks:** Single `zeptocapsule` crate, ~14 tests, clean API: `create() → Capsule → spawn() → pipes → kill() → destroy()`.

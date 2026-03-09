@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-08  
 **Status:** Implemented  
-**Scope:** Add a Linux-only Firecracker backend behind the existing thin `zeptokernel` API.
+**Scope:** Add a Linux-only Firecracker backend behind the existing thin `zeptocapsule` API.
 
 ## Goal
 
@@ -10,7 +10,7 @@ Implement `Isolation::Firecracker` without changing the public `create() -> spaw
 
 The backend must stay within the current kernel boundary:
 
-- ZeptoKernel owns VM boot, resource enforcement, raw transport, and teardown.
+- ZeptoCapsule owns VM boot, resource enforcement, raw transport, and teardown.
 - ZeptoPM owns job semantics, retries, heartbeats, and event interpretation.
 - `zk-init` remains a minimal PID 1 and signal/control shim, not a guest-side orchestrator.
 
@@ -75,7 +75,7 @@ Live host visibility during execution is not required for ZeptoPM today.
 For v1:
 
 - copy the worker binary into the writable capsule rootfs before boot
-- execute it at a fixed guest path such as `/run/zeptokernel/worker`
+- execute it at a fixed guest path such as `/run/zeptocapsule/worker`
 
 Constraint:
 
@@ -286,9 +286,9 @@ This also matches how job specs are already written into the host workspace befo
 Stage the worker into the writable rootfs before boot:
 
 - host path: `binary`
-- guest path: `/run/zeptokernel/worker`
+- guest path: `/run/zeptocapsule/worker`
 
-The backend then boots the VM and asks `zk-init` to execute `/run/zeptokernel/worker`.
+The backend then boots the VM and asks `zk-init` to execute `/run/zeptocapsule/worker`.
 
 For v1, reject unsupported worker layouts early:
 

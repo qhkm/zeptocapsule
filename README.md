@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛡️ ZeptoKernel
+# 🛡️ ZeptoCapsule
 
 **Isolation sandbox for AI agents — process, namespace, and Firecracker capsules.**
 
@@ -30,7 +30,7 @@ Docker is built for long-running services. AI agents are short-lived jobs — sp
 
 The right answer depends on the workload. An agent calling GPT-4 doesn't need a microVM. An agent running untrusted code does.
 
-**ZeptoKernel gives you all three behind one API** — and automatically falls back when the host doesn't support a level.
+**ZeptoCapsule gives you all three behind one API** — and automatically falls back when the host doesn't support a level.
 
 ---
 
@@ -67,18 +67,18 @@ The right answer depends on the workload. An agent calling GPT-4 doesn't need a 
 
 ## 📦 Install
 
-> ZeptoKernel is a library crate. Add it as a dependency:
+> ZeptoCapsule is a library crate. Add it as a dependency:
 
 ```toml
 [dependencies]
-zeptokernel = { path = "../zeptokernel" }
+zeptocapsule = { path = "../zeptocapsule" }
 ```
 
 Or build and run tests directly:
 
 ```bash
-git clone https://github.com/qhkm/zeptokernel.git
-cd zeptokernel
+git clone https://github.com/qhkm/zeptocapsule.git
+cd zeptocapsule
 cargo test
 ```
 
@@ -87,7 +87,7 @@ cargo test
 ## 🚀 Quick Start
 
 ```rust
-use zeptokernel::{create, CapsuleSpec, Isolation, ResourceLimits, WorkspaceConfig, SecurityProfile};
+use zeptocapsule::{create, CapsuleSpec, Isolation, ResourceLimits, WorkspaceConfig, SecurityProfile};
 use std::collections::HashMap;
 
 #[tokio::main]
@@ -188,7 +188,7 @@ Everything else → SIGSYS kill.
 
 ## ⬇️ Automatic Fallback
 
-ZeptoKernel probes host capabilities at runtime and degrades gracefully:
+ZeptoCapsule probes host capabilities at runtime and degrades gracefully:
 
 ```
 Firecracker requested → KVM available? → ✅ Use Firecracker
@@ -226,7 +226,7 @@ println!("Actual: {:?}/{:?}", report.actual_isolation, report.actual_security);
 ## 🔍 Host Probing
 
 ```rust
-use zeptokernel::probe;
+use zeptocapsule::probe;
 
 let caps = probe();
 println!("Arch: {:?}", caps.arch);
@@ -281,7 +281,7 @@ println!("Max supported: {:?}/{:?}", max_iso, max_sec);
 ZeptoPM (orchestrator)
     │
     ▼
-ZeptoKernel
+ZeptoCapsule
     │
     ├── probe()          → detect host capabilities
     ├── create(spec)     → pick backend + apply fallback

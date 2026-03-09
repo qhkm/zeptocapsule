@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-IMAGE="zeptokernel-fc"
+IMAGE="zeptocapsule-fc"
 
 # --- Pre-flight checks ---
 
@@ -58,7 +58,7 @@ docker run --rm \
     --privileged \
     --device /dev/kvm \
     -v "$PROJECT_ROOT:/workspace" \
-    -v "zeptokernel-fc-target:/workspace/target" \
+    -v "zeptocapsule-fc-target:/workspace/target" \
     -v "$HOME/.cargo/registry:/usr/local/cargo/registry" \
     -v "$HOME/.cargo/git:/usr/local/cargo/git" \
     -w /workspace \

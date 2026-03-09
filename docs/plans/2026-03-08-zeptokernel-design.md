@@ -1,8 +1,8 @@
-# ZeptoKernel Design Spec
+# ZeptoCapsule Design Spec
 
 ## Goal
 
-Build a secure, per-worker execution capsule that isolates ZeptoClaw workers from the host, from each other, and from secrets they don't need. ZeptoPM spawns capsules; ZeptoKernel runs them; ZeptoClaw does the work.
+Build a secure, per-worker execution capsule that isolates ZeptoClaw workers from the host, from each other, and from secrets they don't need. ZeptoPM spawns capsules; ZeptoCapsule runs them; ZeptoClaw does the work.
 
 ## Architecture
 
@@ -347,7 +347,7 @@ ZeptoPM → spawn child → stdin/stdout JSON lines → worker
 2. **Phase 1:** ZeptoPM spawns `zk-host` which wraps worker in namespace capsule. Same JSON-line protocol, stronger boundaries.
 3. **Phase 2:** `zk-host` uses Firecracker backend. Same protocol, VM-level isolation.
 
-The key insight: the protocol between ZeptoPM and workers doesn't change. ZeptoKernel sits between them as a transparent isolation layer.
+The key insight: the protocol between ZeptoPM and workers doesn't change. ZeptoCapsule sits between them as a transparent isolation layer.
 
 ## Implementation Milestones
 
@@ -387,7 +387,7 @@ The key insight: the protocol between ZeptoPM and workers doesn't change. ZeptoK
 - [ ] JobSpec populated from ZeptoPM's Job type
 - [ ] Event translation (GuestEvent → ZeptoPM orchestrator events)
 - [ ] Artifact path resolution through capsule boundary
-- **Exit criteria:** `zeptopm run submit` works with ZeptoKernel isolation
+- **Exit criteria:** `zeptopm run submit` works with ZeptoCapsule isolation
 
 ### M5: Hardening + Policy
 - [ ] Per-role capability profiles

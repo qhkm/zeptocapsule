@@ -40,7 +40,7 @@ pub struct Capsule {
 }
 
 pub fn default_init_binary() -> KernelResult<PathBuf> {
-    let path = if let Some(path) = std::env::var_os("ZEPTOKERNEL_INIT_BINARY") {
+    let path = if let Some(path) = std::env::var_os("ZEPTOCAPSULE_INIT_BINARY") {
         PathBuf::from(path)
     } else {
         let mut path = std::env::current_exe()

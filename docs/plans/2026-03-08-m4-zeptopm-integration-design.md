@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-08
 **Status:** Approved
-**Scope:** Wire ZeptoPM to ZeptoKernel with an abstracted backend factory supporting process, namespace, and (stub) Firecracker backends.
+**Scope:** Wire ZeptoPM to ZeptoCapsule with an abstracted backend factory supporting process, namespace, and (stub) Firecracker backends.
 
 ---
 
@@ -22,17 +22,17 @@ ZeptoPM already has a working `capsule.rs` integration using `ProcessBackend`. M
 
 ### Why enum-dispatch
 
-The ZeptoKernel `Backend` trait has an associated `Handle` type and async methods — neither is object-safe. Alternatives:
+The ZeptoCapsule `Backend` trait has an associated `Handle` type and async methods — neither is object-safe. Alternatives:
 
 | Approach | Trade-off |
 |----------|-----------|
 | `CapsuleBackend` enum | Idiomatic Rust, zero overhead, add variants for new backends — **chosen** |
-| `DynBackend` in zk-host | Cleaner for third-party backends, but requires trait object redesign in ZeptoKernel |
+| `DynBackend` in zk-host | Cleaner for third-party backends, but requires trait object redesign in ZeptoCapsule |
 | Generics-only at call site | No shared type, match scattered across call sites |
 
 ### Implementation
 
-All changes are in **ZeptoPM** (`/Users/dr.noranizaahmad/ios/zeptoPM/`). ZeptoKernel's API is consumed as-is.
+All changes are in **ZeptoPM** (`/Users/dr.noranizaahmad/ios/zeptoPM/`). ZeptoCapsule's API is consumed as-is.
 
 ```rust
 // src/capsule.rs
@@ -165,11 +165,11 @@ pub fn job_to_spec(job: &Job, input_artifact_paths: Vec<String>, config: &Config
 
 ### Integration test (ZeptoPM — `tests/capsule_integration.rs`)
 
-Uses `ProcessBackend` + `mock-worker` (same pattern as ZeptoKernel's `process_backend.rs`). Spawns a real capsule job end-to-end, verifies `job_completed` event arrives on the orchestrator channel. Runs on macOS without Docker.
+Uses `ProcessBackend` + `mock-worker` (same pattern as ZeptoCapsule's `process_backend.rs`). Spawns a real capsule job end-to-end, verifies `job_completed` event arrives on the orchestrator channel. Runs on macOS without Docker.
 
 ### Namespace integration test (ZeptoPM — Linux only)
 
-`#[cfg(all(target_os = "linux", feature = "namespace"))]` gated test. Runs via `scripts/test-zeptopm-linux.sh` (mirrors ZeptoKernel's Docker script with `--privileged`).
+`#[cfg(all(target_os = "linux", feature = "namespace"))]` gated test. Runs via `scripts/test-zeptopm-linux.sh` (mirrors ZeptoCapsule's Docker script with `--privileged`).
 
 ---
 

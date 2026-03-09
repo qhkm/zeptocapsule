@@ -1,8 +1,8 @@
-# ZeptoKernel Refactor: Retrospective and Motivation
+# ZeptoCapsule Refactor: Retrospective and Motivation
 
 **Date:** 2026-03-08
 **Status:** Complete
-**Scope:** Collapse 3-crate workspace into single `zeptokernel` crate; strip orchestration logic from the kernel; wire ZeptoPM to own job lifecycle over raw stdio.
+**Scope:** Collapse 3-crate workspace into single `zeptocapsule` crate; strip orchestration logic from the kernel; wire ZeptoPM to own job lifecycle over raw stdio.
 
 ---
 
@@ -10,7 +10,7 @@
 
 ### The Original Shape
 
-ZeptoKernel started life as a **mini-orchestrator** embedded in the sandbox layer:
+ZeptoCapsule started life as a **mini-orchestrator** embedded in the sandbox layer:
 
 ```
 zk-proto   — shared types: JobSpec, ArtifactRef, HostCommand, GuestEvent
@@ -31,7 +31,7 @@ This felt ergonomic until we started wiring ZeptoPM M4.
 
 **2. Backend trait was not object-safe**
 
-`Backend` had an associated `Handle` type. It could not be boxed as `Box<dyn Backend>`. We worked around this with a `CapsuleBackend` enum (enum-dispatch) in ZeptoPM, which was functional but meant ZeptoPM carried boilerplate that existed only because of a trait design limitation in ZeptoKernel.
+`Backend` had an associated `Handle` type. It could not be boxed as `Box<dyn Backend>`. We worked around this with a `CapsuleBackend` enum (enum-dispatch) in ZeptoPM, which was functional but meant ZeptoPM carried boilerplate that existed only because of a trait design limitation in ZeptoCapsule.
 
 **3. Heartbeat logic in the wrong layer**
 
@@ -52,7 +52,7 @@ For a library with one user (ZeptoPM), the `zk-proto / zk-host / zk-guest` split
 ### The New Shape
 
 ```
-zeptokernel (single crate)
+zeptocapsule (single crate)
   src/lib.rs        — public API: create(), Capsule, CapsuleSpec, ResourceLimits, ...
   src/types.rs      — CapsuleSpec, ResourceLimits, WorkspaceConfig, Isolation, CapsuleReport
   src/backend.rs    — Backend + CapsuleHandle traits (internal, object-safe)
@@ -67,7 +67,7 @@ zeptokernel (single crate)
 
 ```rust
 // Create a capsule
-let mut capsule = zeptokernel::create(CapsuleSpec {
+let mut capsule = zeptocapsule::create(CapsuleSpec {
     isolation: Isolation::Process,        // or Isolation::Namespace
     limits: ResourceLimits { timeout_sec: 300, memory_mib: Some(512), .. },
     workspace: WorkspaceConfig { guest_path: "/workspace".into(), .. },
@@ -83,7 +83,7 @@ let report = capsule.destroy()?;
 // report.killed_by, report.exit_code, report.wall_time
 ```
 
-ZeptoKernel has **no concept of jobs, instructions, artifacts, heartbeats, or outcomes**. It creates a sandbox, runs a binary, enforces limits, and returns a report.
+ZeptoCapsule has **no concept of jobs, instructions, artifacts, heartbeats, or outcomes**. It creates a sandbox, runs a binary, enforces limits, and returns a report.
 
 ### ZeptoPM After the Refactor
 
@@ -102,13 +102,13 @@ ZeptoPM gained back the responsibilities that were incorrectly delegated:
 
 ## The Design Principle (Restated)
 
-> **ZeptoKernel owns mechanisms. ZeptoPM owns meaning.**
+> **ZeptoCapsule owns mechanisms. ZeptoPM owns meaning.**
 
 | Question | Owner |
 |----------|-------|
-| Is the process isolated? | ZeptoKernel |
-| Did the process exceed memory? | ZeptoKernel |
-| Did the job time out? | ZeptoKernel (wall-clock kill) |
+| Is the process isolated? | ZeptoCapsule |
+| Did the process exceed memory? | ZeptoCapsule |
+| Did the job time out? | ZeptoCapsule (wall-clock kill) |
 | Should we retry the job? | ZeptoPM |
 | Did the worker complete the task? | ZeptoPM |
 | What artifacts did the worker produce? | ZeptoPM |
@@ -118,11 +118,11 @@ ZeptoPM gained back the responsibilities that were incorrectly delegated:
 
 ## What We Gained
 
-- **Single dependency**: ZeptoPM imports `zeptokernel`, nothing else from the kernel.
+- **Single dependency**: ZeptoPM imports `zeptocapsule`, nothing else from the kernel.
 - **Object-safe backend dispatch**: `Box<dyn CapsuleHandle>` inside the kernel; ZeptoPM never sees Backend trait complexity.
 - **Isolation is an enum value**: `CapsuleSpec { isolation: Isolation::Namespace, .. }` — ZeptoPM sets the value, kernel dispatches. No cfg-gated enums in ZeptoPM.
 - **Protocol ownership is clear**: ZeptoPM writes to `child.stdin` and reads from `child.stdout`. The kernel is transparent.
-- **Stub crate for macOS dev**: `zeptokernel-stub` mirrors the real API with `ProcessBackend` only; `Isolation::Namespace` returns `KernelError::NotSupported`. ZeptoPM's development loop doesn't require Linux.
+- **Stub crate for macOS dev**: `zeptocapsule-stub` mirrors the real API with `ProcessBackend` only; `Isolation::Namespace` returns `KernelError::NotSupported`. ZeptoPM's development loop doesn't require Linux.
 
 ---
 
@@ -139,5 +139,5 @@ ZeptoPM gained back the responsibilities that were incorrectly delegated:
 
 The refactor landed across two repos:
 
-- `zeptokernel`: single-crate collapse (kernel-redesign branch, merged to main)
+- `zeptocapsule`: single-crate collapse (kernel-redesign branch, merged to main)
 - `zeptoPM`: `src/capsule.rs` rewritten to use new API; `Cargo.toml` drops `zk-host`/`zk-proto`; all 95 tests passing

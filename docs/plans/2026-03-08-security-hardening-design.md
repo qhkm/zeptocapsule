@@ -1,9 +1,9 @@
-# ZeptoKernel Security Hardening Design
+# ZeptoCapsule Security Hardening Design
 
 > **Status: Implemented** (2026-03-08). All features below are live in `src/`.
 
 > **For Codex / agents:** This is the authoritative design for configurable security
-> hardening in ZeptoKernel. Read it fully before starting implementation.
+> hardening in ZeptoCapsule. Read it fully before starting implementation.
 
 **Goal:** Add tiered security profiles (Dev / Standard / Hardened) so users can
 progressively harden capsule isolation without understanding every knob. Document
@@ -13,7 +13,7 @@ the long-term path toward Firecracker microVM isolation.
 active. Each profile is a fixed bundle of features. Individual overrides available
 via SecurityOverrides.
 
-**Principle:** Same as the kernel redesign — ZeptoKernel owns mechanisms.
+**Principle:** Same as the kernel redesign — ZeptoCapsule owns mechanisms.
 Profiles are mechanisms (which security layers to activate), not policy.
 
 ---

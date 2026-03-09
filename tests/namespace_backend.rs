@@ -14,7 +14,7 @@ async fn namespace_capsule_exposes_raw_stdio() {
         return;
     }
 
-    let mut capsule = zeptokernel::create(namespace_spec(unique_workspace("stdio"))).unwrap();
+    let mut capsule = zeptocapsule::create(namespace_spec(unique_workspace("stdio"))).unwrap();
     let mut child = capsule.spawn("/bin/cat", &[], HashMap::new()).unwrap();
 
     child.stdin.write_all(b"ping\n").await.unwrap();
@@ -36,7 +36,7 @@ async fn namespace_capsule_mounts_workspace_via_zk_init() {
     }
 
     let workspace = unique_workspace("mount");
-    let mut capsule = zeptokernel::create(namespace_spec(workspace.clone())).unwrap();
+    let mut capsule = zeptocapsule::create(namespace_spec(workspace.clone())).unwrap();
     let command = "printf ok > /workspace/probe && cat /workspace/probe";
 
     let mut child = capsule
@@ -62,14 +62,14 @@ async fn namespace_capsule_enforces_wall_clock_timeout() {
         return;
     }
 
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Namespace,
-        workspace: zeptokernel::WorkspaceConfig {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Namespace,
+        workspace: zeptocapsule::WorkspaceConfig {
             host_path: Some(unique_workspace("timeout-host")),
             guest_path: PathBuf::from("/workspace"),
             size_mib: Some(16),
         },
-        limits: zeptokernel::ResourceLimits {
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 1,
             ..Default::default()
         },
@@ -86,7 +86,7 @@ async fn namespace_capsule_enforces_wall_clock_timeout() {
     let report = capsule.destroy().unwrap();
     assert_eq!(
         report.killed_by,
-        Some(zeptokernel::ResourceViolation::WallClock)
+        Some(zeptocapsule::ResourceViolation::WallClock)
     );
 }
 
@@ -96,15 +96,15 @@ async fn namespace_hardened_hides_host_filesystem() {
         return;
     }
 
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Namespace,
-        security: zeptokernel::SecurityProfile::Hardened,
-        workspace: zeptokernel::WorkspaceConfig {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Namespace,
+        security: zeptocapsule::SecurityProfile::Hardened,
+        workspace: zeptocapsule::WorkspaceConfig {
             host_path: Some(unique_workspace("pivot-host")),
             guest_path: std::path::PathBuf::from("/workspace"),
             size_mib: Some(16),
         },
-        limits: zeptokernel::ResourceLimits {
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 5,
             ..Default::default()
         },
@@ -145,15 +145,15 @@ async fn namespace_hardened_has_dev_null() {
         return;
     }
 
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Namespace,
-        security: zeptokernel::SecurityProfile::Hardened,
-        workspace: zeptokernel::WorkspaceConfig {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Namespace,
+        security: zeptocapsule::SecurityProfile::Hardened,
+        workspace: zeptocapsule::WorkspaceConfig {
             host_path: Some(unique_workspace("devnull")),
             guest_path: std::path::PathBuf::from("/workspace"),
             size_mib: Some(16),
         },
-        limits: zeptokernel::ResourceLimits {
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 5,
             ..Default::default()
         },
@@ -184,15 +184,15 @@ async fn namespace_hardened_has_dev_null() {
     );
 }
 
-fn namespace_spec(workspace: PathBuf) -> zeptokernel::CapsuleSpec {
-    zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Namespace,
-        workspace: zeptokernel::WorkspaceConfig {
+fn namespace_spec(workspace: PathBuf) -> zeptocapsule::CapsuleSpec {
+    zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Namespace,
+        workspace: zeptocapsule::WorkspaceConfig {
             host_path: Some(workspace),
             guest_path: PathBuf::from("/workspace"),
             size_mib: Some(16),
         },
-        limits: zeptokernel::ResourceLimits {
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 10,
             ..Default::default()
         },
@@ -207,7 +207,7 @@ fn namespace_tests_enabled() -> bool {
 
 fn unique_workspace(label: &str) -> PathBuf {
     let id = NEXT_TEST_ID.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("zeptokernel-{label}-{}-{id}", std::process::id()))
+    std::env::temp_dir().join(format!("zeptocapsule-{label}-{}-{id}", std::process::id()))
 }
 
 fn zk_init_binary() -> PathBuf {

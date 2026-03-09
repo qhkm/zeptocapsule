@@ -15,13 +15,13 @@ use tokio::sync::oneshot;
 use crate::backend::{Backend, CapsuleChild, CapsuleHandle, KernelError, KernelResult};
 use crate::types::{CapsuleReport, CapsuleSpec, FirecrackerConfig, ResourceViolation, Signal};
 
-const WORKER_GUEST_PATH: &str = "/run/zeptokernel/worker";
+const WORKER_GUEST_PATH: &str = "/run/zeptocapsule/worker";
 const GUEST_INIT_PATH: &str = "/sbin/init";
-const WORKER_PATH_FILE: &str = "/run/zeptokernel/worker.path";
-const WORKSPACE_DEVICE_FILE: &str = "/run/zeptokernel/workspace.device";
-const WORKSPACE_PATH_FILE: &str = "/run/zeptokernel/workspace.path";
-const TMP_SIZE_FILE: &str = "/run/zeptokernel/tmp.size";
-const MODE_MARKER_FILE: &str = "/run/zeptokernel/firecracker.mode";
+const WORKER_PATH_FILE: &str = "/run/zeptocapsule/worker.path";
+const WORKSPACE_DEVICE_FILE: &str = "/run/zeptocapsule/workspace.device";
+const WORKSPACE_PATH_FILE: &str = "/run/zeptocapsule/workspace.path";
+const TMP_SIZE_FILE: &str = "/run/zeptocapsule/tmp.size";
+const MODE_MARKER_FILE: &str = "/run/zeptocapsule/firecracker.mode";
 const TERMINATE_GRACE_SECS: u64 = 5;
 
 fn rootfs_copy_path(state_dir: &Path) -> PathBuf {
@@ -130,7 +130,7 @@ fn stage_firecracker_payload(
     let host_binary = resolve_host_binary(binary)?;
 
     let result = (|| -> KernelResult<()> {
-        let stage_dir = mount_point.join("run/zeptokernel");
+        let stage_dir = mount_point.join("run/zeptocapsule");
         std::fs::create_dir_all(&stage_dir)
             .map_err(|e| KernelError::SpawnFailed(format!("mkdir {}: {e}", stage_dir.display())))?;
 
@@ -995,7 +995,7 @@ mod tests {
 
     #[test]
     fn worker_guest_path_is_fixed() {
-        assert_eq!(WORKER_GUEST_PATH, "/run/zeptokernel/worker");
+        assert_eq!(WORKER_GUEST_PATH, "/run/zeptocapsule/worker");
     }
 
     #[test]

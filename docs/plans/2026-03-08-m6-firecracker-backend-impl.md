@@ -133,7 +133,7 @@ fn firecracker_derived_defaults() {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- firecracker`
+Run: `cargo +nightly test -p zeptocapsule -- firecracker`
 Expected: Compilation error — `FirecrackerConfig` not defined.
 
 **Step 3: Implement types**
@@ -217,7 +217,7 @@ pub fn validate(&self) -> Result<(), String> {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- firecracker`
+Run: `cargo +nightly test -p zeptocapsule -- firecracker`
 Expected: All 6 new tests PASS.
 
 **Step 5: Add export in lib.rs**
@@ -226,7 +226,7 @@ Add `FirecrackerConfig` to the `pub use types::{}` block in `src/lib.rs`.
 
 **Step 6: Verify full crate compiles**
 
-Run: `cargo +nightly build -p zeptokernel`
+Run: `cargo +nightly build -p zeptocapsule`
 Expected: Clean build, no warnings.
 
 **Step 7: Commit**
@@ -325,7 +325,7 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- firecracker_api`
+Run: `cargo +nightly test -p zeptocapsule -- firecracker_api`
 Expected: Compilation error — functions not defined.
 
 **Step 3: Implement the API client**
@@ -473,7 +473,7 @@ mod firecracker_api;
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- firecracker_api`
+Run: `cargo +nightly test -p zeptocapsule -- firecracker_api`
 Expected: All 8 tests PASS.
 
 **Step 6: Commit**
@@ -538,7 +538,7 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- vsock`
+Run: `cargo +nightly test -p zeptocapsule -- vsock`
 Expected: Compilation error — constants and functions not defined.
 
 **Step 3: Implement vsock helper**
@@ -618,7 +618,7 @@ mod vsock;
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- vsock`
+Run: `cargo +nightly test -p zeptocapsule -- vsock`
 Expected: All 4 tests PASS.
 
 **Step 6: Commit**
@@ -714,7 +714,7 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- firecracker::tests`
+Run: `cargo +nightly test -p zeptocapsule -- firecracker::tests`
 Expected: Compilation error — `FirecrackerBackend` not defined.
 
 **Step 3: Implement backend stub**
@@ -882,12 +882,12 @@ types::Isolation::Firecracker => {
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- firecracker`
+Run: `cargo +nightly test -p zeptocapsule -- firecracker`
 Expected: All tests PASS. The `create_rejects_*` tests pass because they hit prerequisite validation. The `state_dir_created` test skips unless env var is set.
 
 **Step 6: Verify full crate compiles**
 
-Run: `cargo +nightly build -p zeptokernel`
+Run: `cargo +nightly build -p zeptocapsule`
 Expected: Clean build.
 
 **Step 7: Commit**
@@ -940,7 +940,7 @@ mod tests {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- workspace_image`
+Run: `cargo +nightly test -p zeptocapsule -- workspace_image`
 Expected: Compilation error.
 
 **Step 3: Implement workspace image module**
@@ -1130,7 +1130,7 @@ mod workspace_image;
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- workspace_image`
+Run: `cargo +nightly test -p zeptocapsule -- workspace_image`
 Expected: 2 unit tests PASS.
 
 **Step 6: Commit**
@@ -1163,7 +1163,7 @@ fn rootfs_copy_path_in_state_dir() {
 
 #[test]
 fn worker_guest_path_is_fixed() {
-    assert_eq!(WORKER_GUEST_PATH, "/run/zeptokernel/worker");
+    assert_eq!(WORKER_GUEST_PATH, "/run/zeptocapsule/worker");
 }
 
 #[test]
@@ -1190,7 +1190,7 @@ fn vsock_socket_path_in_state_dir() {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- firecracker::tests`
+Run: `cargo +nightly test -p zeptocapsule -- firecracker::tests`
 Expected: Compilation error — helper functions not defined.
 
 **Step 3: Implement path helpers and spawn()**
@@ -1199,7 +1199,7 @@ Add path helper constants and functions to `src/firecracker.rs`:
 
 ```rust
 /// Fixed guest path where the worker binary is staged.
-const WORKER_GUEST_PATH: &str = "/run/zeptokernel/worker";
+const WORKER_GUEST_PATH: &str = "/run/zeptocapsule/worker";
 
 /// Default boot args for the guest kernel.
 const DEFAULT_BOOT_ARGS: &str = "console=ttyS0 reboot=k panic=1 quiet";
@@ -1424,7 +1424,7 @@ fn wait_for_socket(path: &Path) -> KernelResult<()> {
 }
 
 /// Stage the worker binary into the writable rootfs image.
-/// Mounts the rootfs, copies binary to /run/zeptokernel/worker, unmounts.
+/// Mounts the rootfs, copies binary to /run/zeptocapsule/worker, unmounts.
 #[cfg(target_os = "linux")]
 fn stage_worker_binary(
     binary: &str,
@@ -1451,7 +1451,7 @@ fn stage_worker_binary(
     }
 
     // Create target directory and copy binary
-    let worker_dir = mount_point.join("run/zeptokernel");
+    let worker_dir = mount_point.join("run/zeptocapsule");
     std::fs::create_dir_all(&worker_dir)
         .map_err(|e| KernelError::SpawnFailed(format!("mkdir worker dir: {e}")))?;
 
@@ -1475,7 +1475,7 @@ fn stage_worker_binary(
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- firecracker`
+Run: `cargo +nightly test -p zeptocapsule -- firecracker`
 Expected: All path-helper tests PASS. spawn() compiles correctly.
 
 **Step 5: Commit**
@@ -1512,7 +1512,7 @@ fn control_message_kill() {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- control_message`
+Run: `cargo +nightly test -p zeptocapsule -- control_message`
 Expected: Compilation error.
 
 **Step 3: Implement kill()**
@@ -1599,7 +1599,7 @@ impl FirecrackerCapsule {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- control_message`
+Run: `cargo +nightly test -p zeptocapsule -- control_message`
 Expected: 2 tests PASS.
 
 **Step 5: Commit**
@@ -1627,7 +1627,7 @@ Add to `src/init_shim.rs` test module:
 fn detect_firecracker_mode_from_env() {
     let env = vec![
         ("ZK_FC_MODE".to_string(), "1".to_string()),
-        ("ZK_FC_WORKER_PATH".to_string(), "/run/zeptokernel/worker".to_string()),
+        ("ZK_FC_WORKER_PATH".to_string(), "/run/zeptocapsule/worker".to_string()),
     ];
     assert!(is_firecracker_mode(env.iter().map(|(k, v)| (k.as_str(), v.as_str()))));
 }
@@ -1642,13 +1642,13 @@ fn detect_no_firecracker_mode() {
 fn parse_firecracker_config() {
     let env = vec![
         ("ZK_FC_MODE".to_string(), "1".to_string()),
-        ("ZK_FC_WORKER_PATH".to_string(), "/run/zeptokernel/worker".to_string()),
+        ("ZK_FC_WORKER_PATH".to_string(), "/run/zeptocapsule/worker".to_string()),
         ("ZK_FC_WORKER_ARGS".to_string(), "arg1 arg2".to_string()),
         ("ZK_FC_WORKSPACE_DEVICE".to_string(), "/dev/vdb".to_string()),
         ("ZK_FC_WORKSPACE_PATH".to_string(), "/workspace".to_string()),
     ];
     let config = parse_fc_init_config(env.into_iter()).unwrap();
-    assert_eq!(config.worker_path, "/run/zeptokernel/worker");
+    assert_eq!(config.worker_path, "/run/zeptocapsule/worker");
     assert_eq!(config.worker_args, vec!["arg1", "arg2"]);
     assert_eq!(config.workspace_device.as_deref(), Some("/dev/vdb"));
     assert_eq!(config.workspace_path.to_string_lossy(), "/workspace");
@@ -1658,7 +1658,7 @@ fn parse_firecracker_config() {
 fn parse_firecracker_config_defaults() {
     let env = vec![
         ("ZK_FC_MODE".to_string(), "1".to_string()),
-        ("ZK_FC_WORKER_PATH".to_string(), "/run/zeptokernel/worker".to_string()),
+        ("ZK_FC_WORKER_PATH".to_string(), "/run/zeptocapsule/worker".to_string()),
     ];
     let config = parse_fc_init_config(env.into_iter()).unwrap();
     assert_eq!(config.workspace_path.to_string_lossy(), "/workspace");
@@ -1669,7 +1669,7 @@ fn parse_firecracker_config_defaults() {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- init_shim`
+Run: `cargo +nightly test -p zeptocapsule -- init_shim`
 Expected: Compilation error.
 
 **Step 3: Implement Firecracker mode in init_shim**
@@ -1790,7 +1790,7 @@ pub fn run_init_shim() -> Result<(), String> {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- init_shim`
+Run: `cargo +nightly test -p zeptocapsule -- init_shim`
 Expected: All tests PASS (existing + 4 new).
 
 **Step 5: Add FcInitConfig to lib.rs exports**
@@ -1844,7 +1844,7 @@ fn extract_serial_hint_no_errors() {
 
 **Step 2: Run tests to verify they fail**
 
-Run: `cargo +nightly test -p zeptokernel -- extract_serial`
+Run: `cargo +nightly test -p zeptocapsule -- extract_serial`
 Expected: Compilation error.
 
 **Step 3: Implement serial log hint extraction and enhanced destroy**
@@ -1933,7 +1933,7 @@ fn destroy(mut self: Box<Self>) -> KernelResult<CapsuleReport> {
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cargo +nightly test -p zeptokernel -- extract_serial`
+Run: `cargo +nightly test -p zeptocapsule -- extract_serial`
 Expected: 3 tests PASS.
 
 **Step 5: Commit**
@@ -1977,23 +1977,23 @@ mod firecracker_tests {
         std::env::var("ZK_RUN_FIRECRACKER_TESTS").is_err()
     }
 
-    fn test_config() -> zeptokernel::CapsuleSpec {
+    fn test_config() -> zeptocapsule::CapsuleSpec {
         let fc_bin = std::env::var("ZK_FC_BIN")
             .unwrap_or_else(|_| "/usr/bin/firecracker".to_string());
         let kernel = std::env::var("ZK_FC_KERNEL")
-            .unwrap_or_else(|_| "/var/lib/zeptokernel/vmlinux".to_string());
+            .unwrap_or_else(|_| "/var/lib/zeptocapsule/vmlinux".to_string());
         let rootfs = std::env::var("ZK_FC_ROOTFS")
-            .unwrap_or_else(|_| "/var/lib/zeptokernel/rootfs.ext4".to_string());
+            .unwrap_or_else(|_| "/var/lib/zeptocapsule/rootfs.ext4".to_string());
 
-        zeptokernel::CapsuleSpec {
-            isolation: zeptokernel::Isolation::Firecracker,
-            security: zeptokernel::SecurityProfile::Standard,
-            limits: zeptokernel::ResourceLimits {
+        zeptocapsule::CapsuleSpec {
+            isolation: zeptocapsule::Isolation::Firecracker,
+            security: zeptocapsule::SecurityProfile::Standard,
+            limits: zeptocapsule::ResourceLimits {
                 timeout_sec: 30,
                 memory_mib: Some(128),
                 ..Default::default()
             },
-            firecracker: Some(zeptokernel::FirecrackerConfig {
+            firecracker: Some(zeptocapsule::FirecrackerConfig {
                 firecracker_bin: PathBuf::from(fc_bin),
                 kernel_path: PathBuf::from(kernel),
                 rootfs_path: PathBuf::from(rootfs),
@@ -2011,7 +2011,7 @@ mod firecracker_tests {
         if skip_unless_enabled() { return; }
 
         let spec = test_config();
-        let mut capsule = zeptokernel::create(spec).unwrap();
+        let mut capsule = zeptocapsule::create(spec).unwrap();
         let child = capsule.spawn("/bin/cat", &[], HashMap::new()).unwrap();
 
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2041,7 +2041,7 @@ mod firecracker_tests {
         let mut spec = test_config();
         spec.workspace.host_path = Some(host_ws.clone());
 
-        let mut capsule = zeptokernel::create(spec).unwrap();
+        let mut capsule = zeptocapsule::create(spec).unwrap();
 
         // Worker reads input and writes output
         let child = capsule.spawn(
@@ -2070,7 +2070,7 @@ mod firecracker_tests {
         let mut spec = test_config();
         spec.limits.timeout_sec = 3;
 
-        let mut capsule = zeptokernel::create(spec).unwrap();
+        let mut capsule = zeptocapsule::create(spec).unwrap();
         let _child = capsule.spawn("/bin/sleep", &["60"], HashMap::new()).unwrap();
 
         // Wait for timeout to fire
@@ -2079,7 +2079,7 @@ mod firecracker_tests {
         let report = capsule.destroy().unwrap();
         assert_eq!(
             report.killed_by,
-            Some(zeptokernel::ResourceViolation::WallClock)
+            Some(zeptocapsule::ResourceViolation::WallClock)
         );
     }
 
@@ -2088,11 +2088,11 @@ mod firecracker_tests {
         if skip_unless_enabled() { return; }
 
         let spec = test_config();
-        let mut capsule = zeptokernel::create(spec).unwrap();
+        let mut capsule = zeptocapsule::create(spec).unwrap();
         let _child = capsule.spawn("/bin/sleep", &["60"], HashMap::new()).unwrap();
 
         // Send terminate
-        capsule.kill(zeptokernel::Signal::Terminate).unwrap();
+        capsule.kill(zeptocapsule::Signal::Terminate).unwrap();
 
         // Give it a moment
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -2106,10 +2106,10 @@ mod firecracker_tests {
     fn firecracker_missing_kvm_is_not_supported() {
         // This test verifies that create() returns NotSupported
         // when prerequisites aren't met (using nonexistent paths).
-        let spec = zeptokernel::CapsuleSpec {
-            isolation: zeptokernel::Isolation::Firecracker,
-            security: zeptokernel::SecurityProfile::Standard,
-            firecracker: Some(zeptokernel::FirecrackerConfig {
+        let spec = zeptocapsule::CapsuleSpec {
+            isolation: zeptocapsule::Isolation::Firecracker,
+            security: zeptocapsule::SecurityProfile::Standard,
+            firecracker: Some(zeptocapsule::FirecrackerConfig {
                 firecracker_bin: PathBuf::from("/nonexistent/firecracker"),
                 kernel_path: PathBuf::from("/nonexistent/vmlinux"),
                 rootfs_path: PathBuf::from("/nonexistent/rootfs.ext4"),
@@ -2121,9 +2121,9 @@ mod firecracker_tests {
             ..Default::default()
         };
 
-        let err = zeptokernel::create(spec).unwrap_err();
+        let err = zeptocapsule::create(spec).unwrap_err();
         assert!(
-            matches!(err, zeptokernel::KernelError::NotSupported(_)),
+            matches!(err, zeptocapsule::KernelError::NotSupported(_)),
             "expected NotSupported, got: {err}"
         );
     }
@@ -2132,12 +2132,12 @@ mod firecracker_tests {
 
 **Step 2: Run unit test (always)**
 
-Run: `cargo +nightly test -p zeptokernel --test firecracker_backend -- firecracker_missing_kvm`
+Run: `cargo +nightly test -p zeptocapsule --test firecracker_backend -- firecracker_missing_kvm`
 Expected: PASS (non-existent paths should trigger NotSupported).
 
 **Step 3: Run integration tests (Linux with KVM only)**
 
-Run: `ZK_RUN_FIRECRACKER_TESTS=1 ZK_FC_BIN=/path/to/firecracker ZK_FC_KERNEL=/path/to/vmlinux ZK_FC_ROOTFS=/path/to/rootfs.ext4 cargo +nightly test -p zeptokernel --test firecracker_backend`
+Run: `ZK_RUN_FIRECRACKER_TESTS=1 ZK_FC_BIN=/path/to/firecracker ZK_FC_KERNEL=/path/to/vmlinux ZK_FC_ROOTFS=/path/to/rootfs.ext4 cargo +nightly test -p zeptocapsule --test firecracker_backend`
 Expected: All 5 tests PASS when prerequisites are available.
 
 **Step 4: Commit**
@@ -2173,7 +2173,7 @@ pub use init_shim::{FcInitConfig, MountConfig, is_init, is_firecracker_mode, par
 
 **Step 3: Run full test suite**
 
-Run: `cargo +nightly test -p zeptokernel`
+Run: `cargo +nightly test -p zeptocapsule`
 Expected: All tests PASS (unit tests; integration tests skip without env var).
 
 **Step 4: Commit**

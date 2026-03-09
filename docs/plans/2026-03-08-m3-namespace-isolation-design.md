@@ -66,7 +66,7 @@ NamespaceBackend::spawn(spec, worker_binary):
   4. Parent:
        a. Write UID/GID maps → /proc/<pid>/uid_map, gid_map, setgroups
           (maps child uid 0 → host nobody; gid 0 → host nogroup)
-       b. Create cgroup: /sys/fs/cgroup/zeptokernel/<job_id>/
+       b. Create cgroup: /sys/fs/cgroup/zeptocapsule/<job_id>/
           Write memory.max, cpu.max, pids.max
           Write child PID → cgroup.procs
        c. Signal child to proceed (via sync pipe)
@@ -94,7 +94,7 @@ Stays **stdin/stdout** (pipe pair). The namespace boundary is transparent to the
 ## cgroup v2
 
 ```
-/sys/fs/cgroup/zeptokernel/<job_id>/
+/sys/fs/cgroup/zeptocapsule/<job_id>/
   cgroup.procs   ← child PID
   memory.max     ← limits.memory_mib * 1024²  (or "max" if None)
   cpu.max        ← "N 100000" where N = quota * 100000  (or "max")

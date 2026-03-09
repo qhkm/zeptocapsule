@@ -15,22 +15,22 @@ cp "$ZK_FC_ROOTFS" "$WD/rootfs.ext4"
 mkdir -p "$WD/rootfs_mount"
 mount -o loop "$WD/rootfs.ext4" "$WD/rootfs_mount"
 
-mkdir -p "$WD/rootfs_mount/run/zeptokernel"
+mkdir -p "$WD/rootfs_mount/run/zeptocapsule"
 # Remove symlink first (Alpine /sbin/init -> /bin/busybox)
 rm -f "$WD/rootfs_mount/sbin/init"
 cp target/x86_64-unknown-linux-musl/debug/zk-init "$WD/rootfs_mount/sbin/init"
 chmod 755 "$WD/rootfs_mount/sbin/init"
 
-cp /bin/cat "$WD/rootfs_mount/run/zeptokernel/worker"
-chmod 755 "$WD/rootfs_mount/run/zeptokernel/worker"
+cp /bin/cat "$WD/rootfs_mount/run/zeptocapsule/worker"
+chmod 755 "$WD/rootfs_mount/run/zeptocapsule/worker"
 
-printf '/run/zeptokernel/worker\n' > "$WD/rootfs_mount/run/zeptokernel/worker.path"
-printf '1\n' > "$WD/rootfs_mount/run/zeptokernel/firecracker.mode"
+printf '/run/zeptocapsule/worker\n' > "$WD/rootfs_mount/run/zeptocapsule/worker.path"
+printf '1\n' > "$WD/rootfs_mount/run/zeptocapsule/firecracker.mode"
 
 echo "Staged files:"
 ls -la "$WD/rootfs_mount/sbin/init"
 file "$WD/rootfs_mount/sbin/init"
-ls -la "$WD/rootfs_mount/run/zeptokernel/"
+ls -la "$WD/rootfs_mount/run/zeptocapsule/"
 
 umount "$WD/rootfs_mount"
 

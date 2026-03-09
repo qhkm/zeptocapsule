@@ -1,10 +1,10 @@
-# ZeptoKernel Redesign: Thin Sandbox Layer
+# ZeptoCapsule Redesign: Thin Sandbox Layer
 
-> **For Codex / agents:** This is the authoritative design for the ZeptoKernel redesign.
+> **For Codex / agents:** This is the authoritative design for the ZeptoCapsule redesign.
 > The implementation plan follows this document. Read it fully before starting work.
 
-**Goal:** Redesign ZeptoKernel from a mini-orchestrator into a thin sandbox library.
-ZeptoKernel owns mechanisms (isolation, resource enforcement). ZeptoPM owns meaning
+**Goal:** Redesign ZeptoCapsule from a mini-orchestrator into a thin sandbox library.
+ZeptoCapsule owns mechanisms (isolation, resource enforcement). ZeptoPM owns meaning
 (job lifecycle, supervision, event interpretation).
 
 **Status of current codebase:** 3-crate workspace (zk-proto, zk-host, zk-guest) with
@@ -15,9 +15,9 @@ terminal event synthesis. All of that orchestration logic moves to ZeptoPM.
 
 ## Design Principle
 
-> **ZeptoKernel owns mechanisms. ZeptoPM owns meaning.**
+> **ZeptoCapsule owns mechanisms. ZeptoPM owns meaning.**
 
-If something exists because the worker is inside an isolated capsule, ZeptoKernel handles it.
+If something exists because the worker is inside an isolated capsule, ZeptoCapsule handles it.
 If something exists because you are managing a job, workflow, or agent lifecycle, ZeptoPM handles it.
 
 ---
@@ -27,12 +27,12 @@ If something exists because you are managing a job, workflow, or agent lifecycle
 | Layer | Role | Analogy |
 |-------|------|---------|
 | **ZeptoPM** | Orchestrator: job graph, spawning, retries, supervision, artifact aggregation, scheduling, policy, backend selection | Team manager |
-| **ZeptoKernel** | Isolated execution capsule: sandbox, boot, workspace, launch worker, enforce limits, shutdown | Secure room |
+| **ZeptoCapsule** | Isolated execution capsule: sandbox, boot, workspace, launch worker, enforce limits, shutdown | Secure room |
 | **ZeptoClaw** | Worker runtime: reasoning, tool usage, model calls, outputs, artifacts, structured events | Employee |
 
 ---
 
-## What ZeptoKernel Owns
+## What ZeptoCapsule Owns
 
 - Capsule creation and destruction
 - Namespace / microVM boot
@@ -43,7 +43,7 @@ If something exists because you are managing a job, workflow, or agent lifecycle
 - PID 1 duties when needed: zombie reaping, signal forwarding, clean shutdown
 - Raw stdio / socket transport to the worker
 
-## What ZeptoKernel Does NOT Own
+## What ZeptoCapsule Does NOT Own
 
 - Heartbeat semantics
 - "Job started/completed/failed" interpretation
@@ -128,7 +128,7 @@ pub struct CapsuleChild {
 
 ```rust
 // 1. Create sandbox
-let capsule = zeptokernel::create(CapsuleSpec {
+let capsule = zeptocapsule::create(CapsuleSpec {
     isolation: Isolation::Process,
     workspace: WorkspaceConfig { guest_path: "/workspace".into(), size_mib: Some(512) },
     limits: ResourceLimits { timeout_sec: 300, memory_mib: Some(1024), ..default() },
@@ -251,7 +251,7 @@ pub async fn run_job_in_capsule(
     orch_tx: Sender<OrchEvent>,
 ) -> Result<(), Error> {
     // 1. Create capsule from config
-    let capsule = zeptokernel::create(capsule_spec_from_config(config))?;
+    let capsule = zeptocapsule::create(capsule_spec_from_config(config))?;
 
     // 2. Spawn ZeptoClaw inside capsule
     let child = capsule.spawn(
@@ -277,11 +277,11 @@ Capsule mode just wraps it in a sandbox. No new event handling needed.
 
 ```toml
 # Before
-zk-host = { path = "../zeptokernel/crates/zk-host" }
-zk-proto = { path = "../zeptokernel/crates/zk-proto" }
+zk-host = { path = "../zeptocapsule/crates/zk-host" }
+zk-proto = { path = "../zeptocapsule/crates/zk-proto" }
 
 # After
-zeptokernel = { path = "../zeptokernel" }
+zeptocapsule = { path = "../zeptocapsule" }
 ```
 
 ### What Stays the Same in ZeptoPM
@@ -296,10 +296,10 @@ zeptokernel = { path = "../zeptokernel" }
 
 ## Resource Violation Handling
 
-ZeptoKernel kills the process. ZeptoPM detects it the same way it detects any worker crash:
+ZeptoCapsule kills the process. ZeptoPM detects it the same way it detects any worker crash:
 
 1. **OOM kill** — cgroup kills process, stdout pipe gets EOF, ZeptoPM sees unexpected exit
-2. **Wall-clock timeout** — ZeptoKernel sends SIGKILL after timeout, same result
+2. **Wall-clock timeout** — ZeptoCapsule sends SIGKILL after timeout, same result
 3. **Max PIDs** — cgroup rejects fork, worker likely crashes, same result
 
 ZeptoPM doesn't need a special `ResourceViolation` callback. It reads the exit code
@@ -311,7 +311,7 @@ For optional observability, `capsule.destroy()` can return a `CapsuleReport`:
 ```rust
 pub struct CapsuleReport {
     pub exit_code: Option<i32>,
-    pub killed_by: Option<ResourceViolation>,  // Why ZeptoKernel killed it
+    pub killed_by: Option<ResourceViolation>,  // Why ZeptoCapsule killed it
     pub wall_time: Duration,
     pub peak_memory_mib: Option<u64>,          // From cgroup stats
 }
@@ -324,7 +324,7 @@ for better diagnostics, but it's optional — the worker is dead either way.
 
 ## Testing Strategy
 
-### ZeptoKernel Tests
+### ZeptoCapsule Tests
 
 | Test | Backend | What It Verifies |
 |------|---------|-----------------|
@@ -338,7 +338,7 @@ for better diagnostics, but it's optional — the worker is dead either way.
 | zk-init signal forwarding | Namespace | SIGTERM forwarded to worker (Linux-only) |
 | zk-init zombie reaping | Namespace | No zombies accumulate (Linux-only) |
 
-**No job/event/heartbeat/protocol tests.** Those aren't ZeptoKernel's concern.
+**No job/event/heartbeat/protocol tests.** Those aren't ZeptoCapsule's concern.
 
 ### ZeptoPM Tests
 
@@ -350,9 +350,9 @@ for better diagnostics, but it's optional — the worker is dead either way.
 
 ## Migration Plan
 
-### Phase 1: Redesign ZeptoKernel
+### Phase 1: Redesign ZeptoCapsule
 
-In `~/ios/zeptokernel/`:
+In `~/ios/zeptocapsule/`:
 
 1. Create new single-crate structure alongside existing crates
 2. Implement `types.rs`: CapsuleSpec, ResourceLimits, WorkspaceConfig, ResourceViolation
@@ -368,7 +368,7 @@ In `~/ios/zeptokernel/`:
 
 In `~/ios/zeptoPM/`:
 
-1. Update Cargo.toml: `zeptokernel = { path = "..." }`
+1. Update Cargo.toml: `zeptocapsule = { path = "..." }`
 2. Rewrite `capsule.rs` to use new thin API
 3. Remove heartbeat hack and event translation
 4. Fix capsule.rs tests for new API

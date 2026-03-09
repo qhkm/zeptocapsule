@@ -232,7 +232,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zeptokernel"
+name = "zeptocapsule"
 version = "0.1.0"
 dependencies = [
  "libc",

@@ -1,12 +1,12 @@
-# CLAUDE.md — ZeptoKernel
+# CLAUDE.md — ZeptoCapsule
 
 ## Project Overview
 
-ZeptoKernel is the thin sandbox layer in the Zepto stack.
+ZeptoCapsule is the thin sandbox layer in the Zepto stack.
 
 Stack position:
 - ZeptoPM — orchestration, supervision, retries, event interpretation
-- ZeptoKernel — capsule creation, process isolation, resource enforcement
+- ZeptoCapsule — capsule creation, process isolation, resource enforcement
 - ZeptoClaw — worker runtime speaking its own protocol directly to ZeptoPM
 
 ## Current Structure
@@ -26,20 +26,20 @@ Historical redesign and migration notes remain under `docs/plans/`.
 ```bash
 cargo build
 cargo test
-cargo test -p zeptokernel
-cargo check --target x86_64-unknown-linux-gnu -p zeptokernel
+cargo test -p zeptocapsule
+cargo check --target x86_64-unknown-linux-gnu -p zeptocapsule
 ```
 
 ## Design Boundary
 
-ZeptoKernel owns mechanisms:
+ZeptoCapsule owns mechanisms:
 - capsule creation and teardown
 - process spawning inside the capsule
 - namespace / cgroup isolation
 - wall-clock kill, signal delivery, cleanup
 - raw stdin/stdout transport
 
-ZeptoKernel does not own:
+ZeptoCapsule does not own:
 - worker protocol
 - heartbeat semantics
 - retries or supervision policy

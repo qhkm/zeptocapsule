@@ -50,7 +50,7 @@ echo "==> Extracting rootfs"
 tar xzf "$TARBALL" -C "$WORK_DIR/mnt"
 
 echo "==> Creating required directories"
-mkdir -p "$WORK_DIR/mnt"/{proc,sys,dev,tmp,run/zeptokernel,workspace,sbin}
+mkdir -p "$WORK_DIR/mnt"/{proc,sys,dev,tmp,run/zeptocapsule,workspace,sbin}
 
 # Ensure /sbin/init is a placeholder (will be replaced by zk-init at runtime)
 if [ ! -f "$WORK_DIR/mnt/sbin/init" ]; then

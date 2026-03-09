@@ -1,5 +1,5 @@
 fn main() {
-    if let Err(error) = zeptokernel::run_init_shim() {
+    if let Err(error) = zeptocapsule::run_init_shim() {
         eprintln!("{error}");
         std::process::exit(1);
     }

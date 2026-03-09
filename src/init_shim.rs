@@ -9,21 +9,21 @@ use std::os::fd::{FromRawFd, RawFd};
 use std::process::Stdio;
 
 #[cfg(target_os = "linux")]
-const FC_STAGE_DIR: &str = "/run/zeptokernel";
+const FC_STAGE_DIR: &str = "/run/zeptocapsule";
 #[cfg(target_os = "linux")]
-const FC_MODE_MARKER: &str = "/run/zeptokernel/firecracker.mode";
+const FC_MODE_MARKER: &str = "/run/zeptocapsule/firecracker.mode";
 #[cfg(target_os = "linux")]
-const FC_WORKER_PATH_FILE: &str = "/run/zeptokernel/worker.path";
+const FC_WORKER_PATH_FILE: &str = "/run/zeptocapsule/worker.path";
 #[cfg(target_os = "linux")]
-const FC_WORKER_ARGS_FILE: &str = "/run/zeptokernel/worker.args";
+const FC_WORKER_ARGS_FILE: &str = "/run/zeptocapsule/worker.args";
 #[cfg(target_os = "linux")]
-const FC_WORKER_ENV_FILE: &str = "/run/zeptokernel/worker.env";
+const FC_WORKER_ENV_FILE: &str = "/run/zeptocapsule/worker.env";
 #[cfg(target_os = "linux")]
-const FC_WORKSPACE_DEVICE_FILE: &str = "/run/zeptokernel/workspace.device";
+const FC_WORKSPACE_DEVICE_FILE: &str = "/run/zeptocapsule/workspace.device";
 #[cfg(target_os = "linux")]
-const FC_WORKSPACE_PATH_FILE: &str = "/run/zeptokernel/workspace.path";
+const FC_WORKSPACE_PATH_FILE: &str = "/run/zeptocapsule/workspace.path";
 #[cfg(target_os = "linux")]
-const FC_TMP_SIZE_FILE: &str = "/run/zeptokernel/tmp.size";
+const FC_TMP_SIZE_FILE: &str = "/run/zeptocapsule/tmp.size";
 
 #[derive(Debug, Clone)]
 pub struct MountConfig {
@@ -596,7 +596,7 @@ mod tests {
     fn detect_firecracker_mode_from_env() {
         let env = vec![
             ("ZK_FC_MODE", "1"),
-            ("ZK_FC_WORKER_PATH", "/run/zeptokernel/worker"),
+            ("ZK_FC_WORKER_PATH", "/run/zeptocapsule/worker"),
         ];
         assert!(super::is_firecracker_mode(env.into_iter()));
     }
@@ -613,7 +613,7 @@ mod tests {
             ("ZK_FC_MODE".to_string(), "1".to_string()),
             (
                 "ZK_FC_WORKER_PATH".to_string(),
-                "/run/zeptokernel/worker".to_string(),
+                "/run/zeptocapsule/worker".to_string(),
             ),
             ("ZK_FC_WORKER_ARGS".to_string(), "arg1 arg2".to_string()),
             ("ZK_FC_WORKSPACE_DEVICE".to_string(), "/dev/vdb".to_string()),
@@ -625,7 +625,7 @@ mod tests {
             ("ZK_FC_TMP_SIZE".to_string(), "16m".to_string()),
         ];
         let config = super::parse_fc_init_config(env.into_iter()).unwrap();
-        assert_eq!(config.worker_path, "/run/zeptokernel/worker");
+        assert_eq!(config.worker_path, "/run/zeptocapsule/worker");
         assert_eq!(config.worker_args, vec!["arg1", "arg2"]);
         assert_eq!(
             config.worker_env,
@@ -645,7 +645,7 @@ mod tests {
             ("ZK_FC_MODE".to_string(), "1".to_string()),
             (
                 "ZK_FC_WORKER_PATH".to_string(),
-                "/run/zeptokernel/worker".to_string(),
+                "/run/zeptocapsule/worker".to_string(),
             ),
         ];
         let config = super::parse_fc_init_config(env.into_iter()).unwrap();

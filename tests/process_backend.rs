@@ -5,7 +5,7 @@ use tokio::io::AsyncWriteExt;
 
 #[tokio::test]
 async fn process_capsule_exposes_raw_stdio() {
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec::default()).unwrap();
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec::default()).unwrap();
 
     let mut child = capsule.spawn("/bin/cat", &[], HashMap::new()).unwrap();
 
@@ -24,7 +24,7 @@ async fn process_capsule_exposes_raw_stdio() {
 
 #[tokio::test]
 async fn process_capsule_passes_env_to_worker() {
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec::default()).unwrap();
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec::default()).unwrap();
 
     let mut child = capsule
         .spawn(
@@ -46,8 +46,8 @@ async fn process_capsule_passes_env_to_worker() {
 
 #[tokio::test]
 async fn process_capsule_enforces_wall_clock_timeout() {
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
-        limits: zeptokernel::ResourceLimits {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 1,
             ..Default::default()
         },
@@ -63,13 +63,13 @@ async fn process_capsule_enforces_wall_clock_timeout() {
     let report = capsule.destroy().unwrap();
     assert_eq!(
         report.killed_by,
-        Some(zeptokernel::ResourceViolation::WallClock)
+        Some(zeptocapsule::ResourceViolation::WallClock)
     );
 }
 
 #[tokio::test]
 async fn process_capsule_stderr_captured() {
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec::default()).unwrap();
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec::default()).unwrap();
 
     let mut child = capsule
         .spawn("/bin/sh", &["-c", "echo hello >&2"], HashMap::new())
@@ -85,9 +85,9 @@ async fn process_capsule_stderr_captured() {
 
 #[tokio::test]
 async fn process_capsule_dev_rlimit_kills_memory_hog() {
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
-        security: zeptokernel::SecurityProfile::Dev,
-        limits: zeptokernel::ResourceLimits {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        security: zeptocapsule::SecurityProfile::Dev,
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 5,
             memory_mib: Some(32),
             ..Default::default()

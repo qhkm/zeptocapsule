@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make ZeptoKernel's namespace/Hardened backend robust across kernel versions, Linux distros (Debian/Ubuntu/Alpine), and architectures (x86_64 + aarch64).
+**Goal:** Make ZeptoCapsule's namespace/Hardened backend robust across kernel versions, Linux distros (Debian/Ubuntu/Alpine), and architectures (x86_64 + aarch64).
 
 **Architecture:** Five changes — capability probing, child diagnostic pipe, architecture-clean seccomp, explicit fallback chain, and enhanced reporting. No new crates. Minimal API surface additions.
 
@@ -149,7 +149,7 @@ libc::SYS_stat,
 pub fallback: Option<Vec<(Isolation, SecurityProfile)>>,
 ```
 
-### Behavior in `zeptokernel::create()`
+### Behavior in `zeptocapsule::create()`
 
 1. Try requested `(spec.isolation, spec.security)` first
 2. If `NotSupported`, check if `spec.fallback` is set

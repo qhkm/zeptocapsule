@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Wire ZeptoPM to ZeptoKernel with a `CapsuleBackend` enum that supports `ProcessBackend` and `NamespaceBackend`, resource limits from agent config, and `ZEPTOCLAW_BINARY` injection via `spec.env`.
+**Goal:** Wire ZeptoPM to ZeptoCapsule with a `CapsuleBackend` enum that supports `ProcessBackend` and `NamespaceBackend`, resource limits from agent config, and `ZEPTOCLAW_BINARY` injection via `spec.env`.
 
-**Architecture:** `CapsuleBackend` enum in ZeptoPM's `capsule.rs` dispatches to `ProcessBackend` or `NamespaceBackend` based on `isolation` config. `job_to_spec()` accepts `&Config` to pull per-agent resource limits and inject the worker binary path. All changes live in ZeptoPM; ZeptoKernel is consumed as-is.
+**Architecture:** `CapsuleBackend` enum in ZeptoPM's `capsule.rs` dispatches to `ProcessBackend` or `NamespaceBackend` based on `isolation` config. `job_to_spec()` accepts `&Config` to pull per-agent resource limits and inject the worker binary path. All changes live in ZeptoPM; ZeptoCapsule is consumed as-is.
 
 **Tech Stack:** Rust, ZeptoPM (`/Users/dr.noranizaahmad/ios/zeptoPM/`), zk-host crate (path dep), tokio, serde/toml
 
@@ -23,9 +23,9 @@
 **Reference files to read before starting:**
 - `/Users/dr.noranizaahmad/ios/zeptoPM/src/capsule.rs` — current implementation (243 lines)
 - `/Users/dr.noranizaahmad/ios/zeptoPM/src/config.rs` — `DaemonConfig`, `AgentConfig` structs, `validate_config()`
-- `/Users/dr.noranizaahmad/ios/zeptokernel/crates/zk-host/src/namespace_backend.rs` — `NamespaceBackend` API
-- `/Users/dr.noranizaahmad/ios/zeptokernel/crates/zk-host/src/process_backend.rs` — `ProcessBackend` API
-- `/Users/dr.noranizaahmad/ios/zeptokernel/crates/zk-proto/src/lib.rs` — `ResourceLimits` fields
+- `/Users/dr.noranizaahmad/ios/zeptocapsule/crates/zk-host/src/namespace_backend.rs` — `NamespaceBackend` API
+- `/Users/dr.noranizaahmad/ios/zeptocapsule/crates/zk-host/src/process_backend.rs` — `ProcessBackend` API
+- `/Users/dr.noranizaahmad/ios/zeptocapsule/crates/zk-proto/src/lib.rs` — `ResourceLimits` fields
 
 **Build and test commands:**
 ```bash
@@ -50,14 +50,14 @@ cat /Users/dr.noranizaahmad/ios/zeptoPM/Cargo.toml
 
 Find the line:
 ```toml
-zk-host = { path = "../zeptokernel/crates/zk-host" }
+zk-host = { path = "../zeptocapsule/crates/zk-host" }
 ```
 
 **Step 2: Add namespace feature**
 
 Change it to:
 ```toml
-zk-host = { path = "../zeptokernel/crates/zk-host", features = ["namespace"] }
+zk-host = { path = "../zeptocapsule/crates/zk-host", features = ["namespace"] }
 ```
 
 The `namespace` feature gates all namespace code behind `#[cfg(all(target_os = "linux", feature = "namespace"))]` in zk-host, so enabling it on macOS is safe — the namespace module simply won't compile on non-Linux targets.
@@ -286,7 +286,7 @@ git commit -m "feat(config): add zeptoclaw_binary, resource limit fields, namesp
 **Step 1: Read `ResourceLimits` in zk-proto**
 
 ```bash
-grep -n "ResourceLimits" /Users/dr.noranizaahmad/ios/zeptokernel/crates/zk-proto/src/lib.rs | head -20
+grep -n "ResourceLimits" /Users/dr.noranizaahmad/ios/zeptocapsule/crates/zk-proto/src/lib.rs | head -20
 ```
 
 Confirm field names: `memory_mib: Option<u64>`, `cpu_quota: Option<f64>`, `max_pids: Option<u32>`, `timeout_sec: u64`, `heartbeat_timeout_sec: u64`, `network: bool`.
@@ -375,7 +375,7 @@ Expected: compile errors because `job_to_spec` doesn't yet accept `&Config`.
 Replace the current `job_to_spec` function in `capsule.rs` with:
 
 ```rust
-/// Convert a ZeptoPM `Job` to a ZeptoKernel `JobSpec`.
+/// Convert a ZeptoPM `Job` to a ZeptoCapsule `JobSpec`.
 ///
 /// Pulls resource limits from the agent profile config and injects
 /// `ZEPTOCLAW_BINARY` into the env map so the guest can find the worker
@@ -540,7 +540,7 @@ use zk_host::supervisor::SupervisorError;
 Add before the existing `job_to_spec` function:
 
 ```rust
-/// Abstraction over supported ZeptoKernel backends.
+/// Abstraction over supported ZeptoCapsule backends.
 ///
 /// Enum-dispatch avoids trait objects (Backend has an associated Handle type).
 /// Adding Firecracker in M6 = one new variant + one new match arm.
@@ -639,7 +639,7 @@ pub async fn spawn_capsule_job(
     let guest_binary = config.daemon.worker_binary.as_deref().unwrap_or("zk-guest").to_string();
     let job_id = job.job_id.clone();
 
-    info!(job_id = %job_id, isolation = %config.daemon.isolation, "spawning capsule job via ZeptoKernel");
+    info!(job_id = %job_id, isolation = %config.daemon.isolation, "spawning capsule job via ZeptoCapsule");
 
     tokio::spawn(async move {
         // Heartbeat to ZeptoPM's stale-job detector
@@ -762,18 +762,18 @@ git commit -m "feat(capsule): spawn_capsule_job uses CapsuleBackend factory — 
 **Files:**
 - Create: `/Users/dr.noranizaahmad/ios/zeptoPM/tests/capsule_integration.rs`
 
-This test spawns a real capsule job using `ProcessBackend` + `mock-worker` binary from ZeptoKernel, verifies the `job_completed` event arrives on the orchestrator channel. Runs on macOS without Docker.
+This test spawns a real capsule job using `ProcessBackend` + `mock-worker` binary from ZeptoCapsule, verifies the `job_completed` event arrives on the orchestrator channel. Runs on macOS without Docker.
 
 **Step 1: Find mock-worker binary path**
 
-The mock-worker is built as part of ZeptoKernel. Path:
+The mock-worker is built as part of ZeptoCapsule. Path:
 ```
-/Users/dr.noranizaahmad/ios/zeptokernel/target/debug/mock-worker
+/Users/dr.noranizaahmad/ios/zeptocapsule/target/debug/mock-worker
 ```
 
 Build it first:
 ```bash
-cd /Users/dr.noranizaahmad/ios/zeptokernel && cargo build -p zk-guest
+cd /Users/dr.noranizaahmad/ios/zeptocapsule && cargo build -p zk-guest
 ```
 
 **Step 2: Write the integration test**
@@ -783,7 +783,7 @@ Create `/Users/dr.noranizaahmad/ios/zeptoPM/tests/capsule_integration.rs`:
 ```rust
 //! Integration tests for the capsule backend.
 //!
-//! Uses ProcessBackend + mock-worker from ZeptoKernel.
+//! Uses ProcessBackend + mock-worker from ZeptoCapsule.
 //! Run with: cargo test --test capsule_integration
 
 use std::collections::HashMap;
@@ -800,7 +800,7 @@ fn zk_binary(name: &str) -> String {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("zeptokernel")
+        .join("zeptocapsule")
         .join("target")
         .join("debug")
         .join(name);
@@ -859,12 +859,12 @@ async fn test_capsule_job_completes() {
     let worker = zk_binary("mock-worker");
     assert!(
         std::path::Path::new(&guest).exists(),
-        "zk-guest not found at {}. Run: cd ../zeptokernel && cargo build",
+        "zk-guest not found at {}. Run: cd ../zeptocapsule && cargo build",
         guest
     );
     assert!(
         std::path::Path::new(&worker).exists(),
-        "mock-worker not found at {}. Run: cd ../zeptokernel && cargo build",
+        "mock-worker not found at {}. Run: cd ../zeptocapsule && cargo build",
         worker
     );
 
@@ -950,10 +950,10 @@ ls /Users/dr.noranizaahmad/ios/zeptoPM/src/lib.rs
 
 If it doesn't exist, create it with the re-exports above. If it does, add any missing `pub use` lines.
 
-**Step 5: Build ZeptoKernel binaries first**
+**Step 5: Build ZeptoCapsule binaries first**
 
 ```bash
-cd /Users/dr.noranizaahmad/ios/zeptokernel && cargo build
+cd /Users/dr.noranizaahmad/ios/zeptocapsule && cargo build
 ```
 
 **Step 6: Run integration tests**
@@ -993,7 +993,7 @@ git commit -m "test(capsule): integration tests — process backend full lifecyc
 ls /Users/dr.noranizaahmad/ios/zeptoPM/Dockerfile.dev
 ```
 
-If not, create it (mirrors ZeptoKernel's):
+If not, create it (mirrors ZeptoCapsule's):
 
 ```dockerfile
 FROM rust:latest
@@ -1015,7 +1015,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ZK_ROOT="$(cd "$PROJECT_ROOT/../zeptokernel" && pwd)"
+ZK_ROOT="$(cd "$PROJECT_ROOT/../zeptocapsule" && pwd)"
 IMAGE="zeptopm-dev"
 
 if ! docker info > /dev/null 2>&1; then
@@ -1030,16 +1030,16 @@ echo "==> Running namespace integration tests inside Docker..."
 docker run --rm \
     --privileged \
     -v "$PROJECT_ROOT:/workspace/zeptopm" \
-    -v "$ZK_ROOT:/workspace/zeptokernel" \
+    -v "$ZK_ROOT:/workspace/zeptocapsule" \
     -v "zeptopm-target:/workspace/zeptopm/target" \
-    -v "zeptokernel-target:/workspace/zeptokernel/target" \
+    -v "zeptocapsule-target:/workspace/zeptocapsule/target" \
     -v "$HOME/.cargo/registry:/usr/local/cargo/registry" \
     -v "$HOME/.cargo/git:/usr/local/cargo/git" \
     -w /workspace/zeptopm \
     "$IMAGE" \
     bash -c "
-        echo '==> Building ZeptoKernel binaries...'
-        cd /workspace/zeptokernel && cargo build
+        echo '==> Building ZeptoCapsule binaries...'
+        cd /workspace/zeptocapsule && cargo build
         echo '==> Running ZeptoPM namespace tests...'
         cd /workspace/zeptopm && cargo test --features namespace --test capsule_integration -- --test-threads=1
     "
@@ -1110,16 +1110,16 @@ git commit -m "test(capsule): namespace backend integration test via Docker"
 
 ---
 
-## Task 8: Update ZeptoKernel TODO.md to mark M4 complete
+## Task 8: Update ZeptoCapsule TODO.md to mark M4 complete
 
 **Files:**
-- Modify: `/Users/dr.noranizaahmad/ios/zeptokernel/TODO.md`
+- Modify: `/Users/dr.noranizaahmad/ios/zeptocapsule/TODO.md`
 
 **Step 1: Mark M4 complete**
 
 In the Overall Progress table, change M4 from `🔴 Not started` to `✅ Done`.
 
-Update the description: `Wire ZeptoPM to ZeptoKernel — CapsuleBackend enum (process + namespace), resource limits from config, ZEPTOCLAW_BINARY injection`
+Update the description: `Wire ZeptoPM to ZeptoCapsule — CapsuleBackend enum (process + namespace), resource limits from config, ZEPTOCLAW_BINARY injection`
 
 **Step 2: Check off M4 tasks**
 
@@ -1132,7 +1132,7 @@ Add M4 to the status line.
 **Step 4: Commit**
 
 ```bash
-cd /Users/dr.noranizaahmad/ios/zeptokernel
+cd /Users/dr.noranizaahmad/ios/zeptocapsule
 git add TODO.md
 git commit -m "docs: mark M4 complete — ZeptoPM integration with CapsuleBackend enum"
 ```
@@ -1146,7 +1146,7 @@ git commit -m "docs: mark M4 complete — ZeptoPM integration with CapsuleBacken
 - The `#[cfg(all(target_os = "linux", feature = "namespace"))]` gate means it won't compile on macOS — this is expected, the `_` arm in `make_backend` handles it
 
 **Integration test: "zk-guest not found"**
-- Run `cd /Users/dr.noranizaahmad/ios/zeptokernel && cargo build` first
+- Run `cd /Users/dr.noranizaahmad/ios/zeptocapsule && cargo build` first
 - The test has a helpful assertion message with the expected path
 
 **`Job` or `RunStore` not public from crate root**

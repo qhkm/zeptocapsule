@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-IMAGE="zeptokernel-dev"
+IMAGE="zeptocapsule-dev"
 
 # Verify Docker daemon is running
 if ! docker info > /dev/null 2>&1; then
@@ -21,7 +21,7 @@ echo "==> Running tests inside Docker..."
 docker run --rm \
     --privileged \
     -v "$PROJECT_ROOT:/workspace" \
-    -v "zeptokernel-target:/workspace/target" \
+    -v "zeptocapsule-target:/workspace/target" \
     -v "$HOME/.cargo/registry:/usr/local/cargo/registry" \
     -v "$HOME/.cargo/git:/usr/local/cargo/git" \
     -w /workspace \

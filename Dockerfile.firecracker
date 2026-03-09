@@ -10,12 +10,12 @@
 # Does NOT work on macOS Docker Desktop (no KVM passthrough).
 #
 # Build:
-#   docker build -t zeptokernel-fc -f Dockerfile.firecracker .
+#   docker build -t zeptocapsule-fc -f Dockerfile.firecracker .
 #
 # Run:
 #   docker run --rm --privileged --device /dev/kvm \
 #     -v $(pwd):/workspace \
-#     zeptokernel-fc
+#     zeptocapsule-fc
 
 FROM rust:latest
 
@@ -61,7 +61,7 @@ RUN set -eux; \
     wget -q -O "$WORK/alpine.tar.gz" \
         "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-${ALPINE_VERSION}-x86_64.tar.gz"; \
     tar xzf "$WORK/alpine.tar.gz" -C "$WORK/rootfs"; \
-    mkdir -p "$WORK/rootfs"/{proc,sys,dev,tmp,run/zeptokernel,workspace,sbin}; \
+    mkdir -p "$WORK/rootfs"/{proc,sys,dev,tmp,run/zeptocapsule,workspace,sbin}; \
     printf '#!/bin/sh\necho "ERROR: zk-init not staged"; exec /bin/sh\n' > "$WORK/rootfs/sbin/init"; \
     chmod 755 "$WORK/rootfs/sbin/init"; \
     mkfs.ext4 -F -L zk-rootfs -d "$WORK/rootfs" "$ROOTFS" 128M; \

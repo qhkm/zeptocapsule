@@ -1,10 +1,10 @@
 [package]
-name = "zeptokernel"
+name = "zeptocapsule"
 description = "Thin sandbox library for isolated Zepto worker execution"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/qhkm/zeptokernel"
+repository = "https://github.com/qhkm/zeptocapsule"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "signal", "macros", "time", "sync", "fs", "io-util", "io-std", "net", "process"] }

@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Make ZeptoKernel robust across kernel versions, distros, and architectures (x86_64 + aarch64).
+**Goal:** Make ZeptoCapsule robust across kernel versions, distros, and architectures (x86_64 + aarch64).
 
 **Architecture:** Five independent tasks: capability probe module, child diagnostic pipe, architecture-clean seccomp, fallback chain in create(), and enhanced CapsuleReport. Tasks 1-3 have no dependencies on each other. Task 4 depends on Task 5 (report fields). Task 5 depends on Task 2 (init_error field).
 
@@ -21,7 +21,7 @@
 Add to `src/probe.rs`:
 
 ```rust
-//! Host capability detection for ZeptoKernel.
+//! Host capability detection for ZeptoCapsule.
 //!
 //! Probes the current system to determine which isolation backends
 //! and security profiles are supported. All probes are non-destructive
@@ -945,8 +945,8 @@ After all 5 tasks:
 
 1. `cargo test --lib` — all unit tests pass
 2. `cargo check` — clean compile on macOS
-3. Sync to VPS: `rsync -avz --exclude target --exclude .git ~/ios/zeptokernel/ stayflow-vps:~/zeptokernel-test/`
-4. Build on VPS: `source ~/.cargo/env && cd ~/zeptokernel-test && cargo build --tests`
+3. Sync to VPS: `rsync -avz --exclude target --exclude .git ~/ios/zeptocapsule/ stayflow-vps:~/zeptocapsule-test/`
+4. Build on VPS: `source ~/.cargo/env && cd ~/zeptocapsule-test && cargo build --tests`
 5. Run namespace integration tests: `sudo env ZK_RUN_NAMESPACE_TESTS=1 target/debug/deps/namespace_backend-* --test-threads=1 --nocapture`
 6. Run unit tests: `cargo test --lib`
 7. Verify probe on VPS: write a small test or use `cargo test --lib probe` — the probes read real /proc files, so they'll exercise the actual paths.

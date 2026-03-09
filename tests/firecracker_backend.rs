@@ -20,24 +20,24 @@ mod firecracker_tests {
         std::env::var("ZK_RUN_FIRECRACKER_TESTS").is_err()
     }
 
-    fn test_config() -> zeptokernel::CapsuleSpec {
+    fn test_config() -> zeptocapsule::CapsuleSpec {
         let fc_bin =
             std::env::var("ZK_FC_BIN").unwrap_or_else(|_| "/usr/bin/firecracker".to_string());
         let kernel = std::env::var("ZK_FC_KERNEL")
-            .unwrap_or_else(|_| "/var/lib/zeptokernel/vmlinux".to_string());
+            .unwrap_or_else(|_| "/var/lib/zeptocapsule/vmlinux".to_string());
         let rootfs = std::env::var("ZK_FC_ROOTFS")
-            .unwrap_or_else(|_| "/var/lib/zeptokernel/rootfs.ext4".to_string());
+            .unwrap_or_else(|_| "/var/lib/zeptocapsule/rootfs.ext4".to_string());
         let init_binary = std::env::var_os("ZK_FC_INIT_BIN").map(PathBuf::from);
 
-        zeptokernel::CapsuleSpec {
-            isolation: zeptokernel::Isolation::Firecracker,
-            security: zeptokernel::SecurityProfile::Standard,
-            limits: zeptokernel::ResourceLimits {
+        zeptocapsule::CapsuleSpec {
+            isolation: zeptocapsule::Isolation::Firecracker,
+            security: zeptocapsule::SecurityProfile::Standard,
+            limits: zeptocapsule::ResourceLimits {
                 timeout_sec: 30,
                 memory_mib: Some(128),
                 ..Default::default()
             },
-            firecracker: Some(zeptokernel::FirecrackerConfig {
+            firecracker: Some(zeptocapsule::FirecrackerConfig {
                 firecracker_bin: PathBuf::from(fc_bin),
                 kernel_path: PathBuf::from(kernel),
                 rootfs_path: PathBuf::from(rootfs),
@@ -58,7 +58,7 @@ mod firecracker_tests {
         }
 
         let spec = test_config();
-        let mut capsule = zeptokernel::create(spec).unwrap();
+        let mut capsule = zeptocapsule::create(spec).unwrap();
         let child = capsule.spawn("/bin/cat", &[], HashMap::new()).unwrap();
 
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -104,7 +104,7 @@ mod firecracker_tests {
         let mut spec = test_config();
         spec.workspace.host_path = Some(host_ws.clone());
 
-        let mut capsule = zeptokernel::create(spec).unwrap();
+        let mut capsule = zeptocapsule::create(spec).unwrap();
 
         let child = capsule
             .spawn(
@@ -139,7 +139,7 @@ mod firecracker_tests {
         let mut spec = test_config();
         spec.limits.timeout_sec = 3;
 
-        let mut capsule = zeptokernel::create(spec).unwrap();
+        let mut capsule = zeptocapsule::create(spec).unwrap();
         let _child = capsule
             .spawn("/bin/sleep", &["60"], HashMap::new())
             .unwrap();
@@ -149,7 +149,7 @@ mod firecracker_tests {
         let report = capsule.destroy().unwrap();
         assert_eq!(
             report.killed_by,
-            Some(zeptokernel::ResourceViolation::WallClock)
+            Some(zeptocapsule::ResourceViolation::WallClock)
         );
     }
 
@@ -160,12 +160,12 @@ mod firecracker_tests {
         }
 
         let spec = test_config();
-        let mut capsule = zeptokernel::create(spec).unwrap();
+        let mut capsule = zeptocapsule::create(spec).unwrap();
         let _child = capsule
             .spawn("/bin/sleep", &["60"], HashMap::new())
             .unwrap();
 
-        capsule.kill(zeptokernel::Signal::Terminate).unwrap();
+        capsule.kill(zeptocapsule::Signal::Terminate).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
@@ -175,10 +175,10 @@ mod firecracker_tests {
 
     #[test]
     fn firecracker_missing_kvm_is_not_supported() {
-        let spec = zeptokernel::CapsuleSpec {
-            isolation: zeptokernel::Isolation::Firecracker,
-            security: zeptokernel::SecurityProfile::Standard,
-            firecracker: Some(zeptokernel::FirecrackerConfig {
+        let spec = zeptocapsule::CapsuleSpec {
+            isolation: zeptocapsule::Isolation::Firecracker,
+            security: zeptocapsule::SecurityProfile::Standard,
+            firecracker: Some(zeptocapsule::FirecrackerConfig {
                 firecracker_bin: PathBuf::from("/nonexistent/firecracker"),
                 kernel_path: PathBuf::from("/nonexistent/vmlinux"),
                 rootfs_path: PathBuf::from("/nonexistent/rootfs.ext4"),
@@ -190,9 +190,9 @@ mod firecracker_tests {
             ..Default::default()
         };
 
-        let err = zeptokernel::create(spec).err().expect("expected error");
+        let err = zeptocapsule::create(spec).err().expect("expected error");
         assert!(
-            matches!(err, zeptokernel::KernelError::NotSupported(_)),
+            matches!(err, zeptocapsule::KernelError::NotSupported(_)),
             "expected NotSupported, got: {err}"
         );
     }

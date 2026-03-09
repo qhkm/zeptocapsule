@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Add tiered security profiles (Dev/Standard/Hardened) to ZeptoKernel with rlimits, seccomp-bpf, pivot_root, capability dropping, stderr capture, and configurable cgroup strictness.
+**Goal:** Add tiered security profiles (Dev/Standard/Hardened) to ZeptoCapsule with rlimits, seccomp-bpf, pivot_root, capability dropping, stderr capture, and configurable cgroup strictness.
 
 **Architecture:** `SecurityProfile` enum in `CapsuleSpec` controls which hardening layers activate. ProcessBackend gains rlimits (Dev). NamespaceBackend gains seccomp + pivot_root + caps drop (Hardened). All backends gain stderr capture. Cgroup failure mode tied to profile with override.
 
@@ -13,7 +13,7 @@
 ## Codebase orientation
 
 ```
-~/ios/zeptokernel/
+~/ios/zeptocapsule/
 ├── Cargo.toml                          # Single crate, deps: tokio, thiserror, tracing, libc, nix
 ├── src/
 │   ├── lib.rs                          # Public API: create(), Capsule, re-exports
@@ -37,7 +37,7 @@
 - `NamespaceCapsule` (`namespace.rs:35-40`): wraps clone()'d child PID + cgroup
 - `Cgroup` (`cgroup.rs:8-10`): manages a cgroup v2 directory
 
-**Downstream consumer:** `~/ios/zeptoPM/src/capsule.rs` calls `zeptokernel::create()` and constructs `CapsuleSpec` in `capsule_spec_from_config()`. Will need updating in a follow-up task (not in this plan).
+**Downstream consumer:** `~/ios/zeptoPM/src/capsule.rs` calls `zeptocapsule::create()` and constructs `CapsuleSpec` in `capsule_spec_from_config()`. Will need updating in a follow-up task (not in this plan).
 
 ---
 
@@ -236,9 +236,9 @@ Add to `tests/process_backend.rs`:
 ```rust
 #[tokio::test]
 async fn process_capsule_dev_profile_applies_rlimits() {
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
-        security: zeptokernel::SecurityProfile::Dev,
-        limits: zeptokernel::ResourceLimits {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        security: zeptocapsule::SecurityProfile::Dev,
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 5,
             memory_mib: Some(64),
             ..Default::default()
@@ -272,7 +272,7 @@ async fn process_capsule_dev_profile_applies_rlimits() {
 
 #[tokio::test]
 async fn process_capsule_stderr_captured() {
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec::default()).unwrap();
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec::default()).unwrap();
 
     let child = capsule
         .spawn(
@@ -360,18 +360,18 @@ async fn namespace_hardened_fails_if_cgroup_unavailable() {
         return;
     }
 
-    let result = zeptokernel::create(zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Namespace,
-        security: zeptokernel::SecurityProfile::Hardened,
-        security_overrides: zeptokernel::SecurityOverrides {
+    let result = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Namespace,
+        security: zeptocapsule::SecurityProfile::Hardened,
+        security_overrides: zeptocapsule::SecurityOverrides {
             cgroup_required: Some(true),
         },
-        workspace: zeptokernel::WorkspaceConfig {
+        workspace: zeptocapsule::WorkspaceConfig {
             host_path: Some(unique_workspace("cgroup-strict")),
             guest_path: std::path::PathBuf::from("/workspace"),
             size_mib: Some(16),
         },
-        limits: zeptokernel::ResourceLimits {
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 5,
             memory_mib: Some(64),
             ..Default::default()
@@ -945,15 +945,15 @@ async fn namespace_hardened_hides_host_filesystem() {
         return;
     }
 
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Namespace,
-        security: zeptokernel::SecurityProfile::Hardened,
-        workspace: zeptokernel::WorkspaceConfig {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Namespace,
+        security: zeptocapsule::SecurityProfile::Hardened,
+        workspace: zeptocapsule::WorkspaceConfig {
             host_path: Some(unique_workspace("pivot-host")),
             guest_path: std::path::PathBuf::from("/workspace"),
             size_mib: Some(16),
         },
-        limits: zeptokernel::ResourceLimits {
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 5,
             ..Default::default()
         },
@@ -982,15 +982,15 @@ async fn namespace_hardened_has_dev_null() {
         return;
     }
 
-    let mut capsule = zeptokernel::create(zeptokernel::CapsuleSpec {
-        isolation: zeptokernel::Isolation::Namespace,
-        security: zeptokernel::SecurityProfile::Hardened,
-        workspace: zeptokernel::WorkspaceConfig {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        isolation: zeptocapsule::Isolation::Namespace,
+        security: zeptocapsule::SecurityProfile::Hardened,
+        workspace: zeptocapsule::WorkspaceConfig {
             host_path: Some(unique_workspace("devnull")),
             guest_path: std::path::PathBuf::from("/workspace"),
             size_mib: Some(16),
         },
-        limits: zeptokernel::ResourceLimits {
+        limits: zeptocapsule::ResourceLimits {
             timeout_sec: 5,
             ..Default::default()
         },
@@ -1229,7 +1229,7 @@ fn test_capsule_spec_security_from_config() {
     let job = test_job("security-test");
     let spec = capsule_spec_from_config(&config, &job);
 
-    assert_eq!(spec.security, zeptokernel::SecurityProfile::Hardened);
+    assert_eq!(spec.security, zeptocapsule::SecurityProfile::Hardened);
 }
 
 #[test]
@@ -1238,7 +1238,7 @@ fn test_capsule_spec_security_defaults_to_standard() {
     let job = test_job("security-default");
     let spec = capsule_spec_from_config(&config, &job);
 
-    assert_eq!(spec.security, zeptokernel::SecurityProfile::Standard);
+    assert_eq!(spec.security, zeptocapsule::SecurityProfile::Standard);
 }
 ```
 
@@ -1269,12 +1269,12 @@ In `~/ios/zeptoPM/src/capsule.rs`, in `capsule_spec_from_config()`, add security
 
 ```rust
 let security = match config.daemon.security.as_deref() {
-    Some("dev") => zeptokernel::SecurityProfile::Dev,
-    Some("hardened") => zeptokernel::SecurityProfile::Hardened,
-    _ => zeptokernel::SecurityProfile::Standard,
+    Some("dev") => zeptocapsule::SecurityProfile::Dev,
+    Some("hardened") => zeptocapsule::SecurityProfile::Hardened,
+    _ => zeptocapsule::SecurityProfile::Standard,
 };
 
-let security_overrides = zeptokernel::SecurityOverrides {
+let security_overrides = zeptocapsule::SecurityOverrides {
     cgroup_required: config.daemon.cgroup_required,
 };
 ```
@@ -1310,8 +1310,8 @@ git commit -m "feat: security profile config — maps daemon.security to Capsule
 ### Task 9: Update docs and design doc
 
 **Files:**
-- Modify: `~/ios/zeptokernel/docs/plans/2026-03-08-security-hardening-design.md` (add "Status: Implemented" header)
-- Modify: `~/ios/zeptokernel/TODO.md` (if exists)
+- Modify: `~/ios/zeptocapsule/docs/plans/2026-03-08-security-hardening-design.md` (add "Status: Implemented" header)
+- Modify: `~/ios/zeptocapsule/TODO.md` (if exists)
 
 **Step 1: Add implementation status**
 
@@ -1324,7 +1324,7 @@ At the top of the design doc, add:
 **Step 2: Commit**
 
 ```bash
-cd ~/ios/zeptokernel
+cd ~/ios/zeptocapsule
 git add docs/ TODO.md
 git commit -m "docs: mark security hardening as implemented"
 ```
@@ -1348,6 +1348,6 @@ git commit -m "docs: mark security hardening as implemented"
 **Total new tests:** ~19
 **Total estimated commits:** 9
 
-Tasks 1-7 are in `~/ios/zeptokernel/`. Task 8 is in `~/ios/zeptoPM/`. Task 9 is docs only.
+Tasks 1-7 are in `~/ios/zeptocapsule/`. Task 8 is in `~/ios/zeptoPM/`. Task 9 is docs only.
 
 Tasks 1-3 can run on macOS (process backend tests). Tasks 4-6 need Linux for full integration tests but unit tests work on macOS. Task 7 works on all platforms. Task 8 works on all platforms.

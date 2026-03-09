@@ -1,10 +1,10 @@
-# ZeptoKernel — TODO & Roadmap
+# ZeptoCapsule — TODO & Roadmap
 
 > Run `cargo test --workspace` after changes. Historical migration context lives in `docs/plans/`; the live implementation is the single crate under `src/`.
 
 ## Current Shape
 
-ZeptoKernel is a thin sandbox library.
+ZeptoCapsule is a thin sandbox library.
 
 Implemented:
 - `src/lib.rs` — public API
@@ -21,7 +21,7 @@ Implemented:
 ## Remaining TODO
 
 - [ ] Run `scripts/test-linux.sh` on a privileged Linux/Docker host to execute the namespace runtime tests end-to-end
-- [ ] Confirm ZeptoPM integration against the pushed `zeptokernel` API on Linux, not just unit tests
+- [ ] Confirm ZeptoPM integration against the pushed `zeptocapsule` API on Linux, not just unit tests
 - [ ] Decide how ZeptoPM resolves and ships the `zk-init` binary path in dev, CI, and deployment
 - [ ] Implement M6 Firecracker backend following `docs/plans/2026-03-08-m6-firecracker-backend-design.md`
 - [ ] Build and document the guest rootfs/kernel artifact flow required by the Firecracker backend

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::types::{ResourceLimits, ResourceViolation};
 
-const CGROUP_ROOT: &str = "/sys/fs/cgroup/zeptokernel";
+const CGROUP_ROOT: &str = "/sys/fs/cgroup/zeptocapsule";
 
 pub struct Cgroup {
     path: PathBuf,
@@ -18,7 +18,7 @@ impl Cgroup {
 
     pub fn dummy() -> Self {
         Self {
-            path: PathBuf::from("/sys/fs/cgroup/zeptokernel/_dummy_nonexistent"),
+            path: PathBuf::from("/sys/fs/cgroup/zeptocapsule/_dummy_nonexistent"),
         }
     }
 
