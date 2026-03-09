@@ -45,10 +45,34 @@ pub struct CapsuleSpec {
     pub security: SecurityProfile,
     pub security_overrides: SecurityOverrides,
     pub firecracker: Option<FirecrackerConfig>,
+    pub fallback: Option<Vec<(Isolation, SecurityProfile)>>,
 }
 
 impl CapsuleSpec {
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_primary()?;
+        if let Some(ref chain) = self.fallback {
+            let primary_level = security_level(self.isolation, self.security);
+            for (i, &(iso, sec)) in chain.iter().enumerate() {
+                let fb_level = security_level(iso, sec);
+                if fb_level > primary_level {
+                    return Err(format!(
+                        "fallback[{i}] ({iso:?}, {sec:?}) escalates security above primary"
+                    ));
+                }
+                let check = CapsuleSpec {
+                    isolation: iso,
+                    security: sec,
+                    fallback: None,
+                    ..self.clone()
+                };
+                check.validate_primary()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_primary(&self) -> Result<(), String> {
         match (self.isolation, self.security) {
             (Isolation::Process, SecurityProfile::Hardened) => {
                 return Err("Hardened security profile requires Namespace isolation".into());
@@ -82,7 +106,18 @@ impl Default for CapsuleSpec {
             security: SecurityProfile::default(),
             security_overrides: SecurityOverrides::default(),
             firecracker: None,
+            fallback: None,
         }
+    }
+}
+
+fn security_level(isolation: Isolation, security: SecurityProfile) -> u8 {
+    match (isolation, security) {
+        (Isolation::Firecracker, _) => 3,
+        (Isolation::Namespace, SecurityProfile::Hardened) => 2,
+        (Isolation::Namespace, SecurityProfile::Standard) => 1,
+        (Isolation::Process, _) => 0,
+        _ => 0,
     }
 }
 
@@ -371,5 +406,41 @@ mod tests {
         let limits = ResourceLimits::default();
         assert_eq!(config.effective_vcpus(&limits), 1);
         assert_eq!(config.effective_memory_mib(&limits), 256);
+    }
+
+    #[test]
+    fn validate_fallback_rejects_escalation() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Namespace,
+            security: SecurityProfile::Standard,
+            fallback: Some(vec![(Isolation::Namespace, SecurityProfile::Hardened)]),
+            ..Default::default()
+        };
+        assert!(spec.validate().is_err());
+    }
+
+    #[test]
+    fn validate_fallback_accepts_downgrade() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Namespace,
+            security: SecurityProfile::Hardened,
+            fallback: Some(vec![
+                (Isolation::Namespace, SecurityProfile::Standard),
+                (Isolation::Process, SecurityProfile::Dev),
+            ]),
+            ..Default::default()
+        };
+        assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_no_fallback_is_ok() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Namespace,
+            security: SecurityProfile::Standard,
+            fallback: None,
+            ..Default::default()
+        };
+        assert!(spec.validate().is_ok());
     }
 }

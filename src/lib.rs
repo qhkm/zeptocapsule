@@ -61,6 +61,30 @@ pub fn default_init_binary() -> KernelResult<PathBuf> {
 
 pub fn create(spec: CapsuleSpec) -> KernelResult<Capsule> {
     spec.validate().map_err(KernelError::InvalidState)?;
+
+    match try_create(&spec) {
+        Ok(capsule) => return Ok(capsule),
+        Err(KernelError::NotSupported(msg)) => {
+            if let Some(ref chain) = spec.fallback {
+                for &(iso, sec) in chain {
+                    let mut fb_spec = spec.clone();
+                    fb_spec.isolation = iso;
+                    fb_spec.security = sec;
+                    fb_spec.fallback = None;
+                    match try_create(&fb_spec) {
+                        Ok(capsule) => return Ok(capsule),
+                        Err(KernelError::NotSupported(_)) => continue,
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+            Err(KernelError::NotSupported(msg))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn try_create(spec: &CapsuleSpec) -> KernelResult<Capsule> {
     let backend: Box<dyn Backend> = match spec.isolation {
         types::Isolation::Process => Box::new(process::ProcessBackend),
         types::Isolation::Namespace => {
@@ -90,7 +114,7 @@ pub fn create(spec: CapsuleSpec) -> KernelResult<Capsule> {
     };
 
     Ok(Capsule {
-        inner: backend.create(spec)?,
+        inner: backend.create(spec.clone())?,
     })
 }
 
