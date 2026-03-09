@@ -84,9 +84,48 @@ pub fn setup_and_pivot(
 ) -> Result<(), String> {
     let layout = rootfs_layout();
 
+    // Make the existing mount tree recursively private. This prevents mount
+    // events from propagating to the parent namespace and is required for
+    // pivot_root to succeed.
+    let slash_c = CString::new("/").map_err(|e| format!("CString: {e}"))?;
+    let ret = unsafe {
+        libc::mount(
+            std::ptr::null(),
+            slash_c.as_ptr(),
+            std::ptr::null(),
+            libc::MS_REC | libc::MS_PRIVATE,
+            std::ptr::null(),
+        )
+    };
+    if ret != 0 {
+        return Err(format!(
+            "make / rprivate failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
     // Create the new root directory
     std::fs::create_dir_all(new_root)
         .map_err(|e| format!("mkdir new_root {}: {e}", new_root.display()))?;
+
+    // pivot_root requires new_root to be a mount point — bind-mount it on itself.
+    let new_root_c =
+        CString::new(new_root.to_string_lossy().as_bytes()).map_err(|e| format!("CString: {e}"))?;
+    let ret = unsafe {
+        libc::mount(
+            new_root_c.as_ptr(),
+            new_root_c.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
+            std::ptr::null(),
+        )
+    };
+    if ret != 0 {
+        return Err(format!(
+            "bind mount new_root failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
 
     // Bind-mount host dirs into new root (read-only)
     for mount in &layout.bind_mounts {
@@ -98,14 +137,16 @@ pub fn setup_and_pivot(
         bind_mount_ro(Path::new(&mount.host), &target)?;
     }
 
-    // Create /dev and bind-mount device nodes
+    // Create /dev and bind-mount device nodes.
+    // Device nodes use best-effort read-only remount because the kernel
+    // blocks MS_REMOUNT on bind-mounted device nodes inside user namespaces.
     let dev_dir = new_root.join("dev");
     std::fs::create_dir_all(&dev_dir).map_err(|e| format!("mkdir /dev: {e}"))?;
     for dev in &layout.devices {
         let target = new_root.join(dev.guest.trim_start_matches('/'));
         // Create empty file to mount over
         std::fs::write(&target, b"").map_err(|e| format!("create {}: {e}", target.display()))?;
-        bind_mount_ro(Path::new(&dev.host), &target)?;
+        bind_mount_device(Path::new(&dev.host), &target)?;
     }
 
     // Mount /proc in new root
@@ -223,6 +264,56 @@ fn bind_mount_ro(source: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Bind-mount a device node with best-effort read-only remount.
+/// Inside user namespaces the kernel blocks MS_REMOUNT on bind-mounted device
+/// nodes (EPERM). The device is still functional without read-only, and
+/// /dev/null, /dev/zero, /dev/urandom are inherently safe to write to.
+#[cfg(target_os = "linux")]
+fn bind_mount_device(source: &Path, target: &Path) -> Result<(), String> {
+    let source_c = CString::new(source.to_string_lossy().as_bytes())
+        .map_err(|e| format!("CString {}: {e}", source.display()))?;
+    let target_c = CString::new(target.to_string_lossy().as_bytes())
+        .map_err(|e| format!("CString {}: {e}", target.display()))?;
+
+    // Bind mount the device node
+    let ret = unsafe {
+        libc::mount(
+            source_c.as_ptr(),
+            target_c.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
+            std::ptr::null(),
+        )
+    };
+    if ret != 0 {
+        return Err(format!(
+            "bind mount {} -> {} failed: {}",
+            source.display(),
+            target.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    // Best-effort remount read-only — fails with EPERM in user namespaces
+    let ret = unsafe {
+        libc::mount(
+            std::ptr::null(),
+            target_c.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_REC,
+            std::ptr::null(),
+        )
+    };
+    if ret != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::EPERM) {
+            return Err(format!("remount ro {} failed: {}", target.display(), error));
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn bind_mount_rw(source: &Path, target: &Path) -> Result<(), String> {
     let source_c = CString::new(source.to_string_lossy().as_bytes())
@@ -281,15 +372,15 @@ fn mount_tmpfs(target: &Path, size: &str) -> Result<(), String> {
         .map_err(|e| format!("CString {}: {e}", target.display()))?;
     let fstype = CString::new("tmpfs").map_err(|e| format!("CString: {e}"))?;
     let source = CString::new("tmpfs").map_err(|e| format!("CString: {e}"))?;
-    let opts =
-        CString::new(format!("size={size},nosuid,nodev")).map_err(|e| format!("CString: {e}"))?;
+    // nosuid/nodev must be mount flags (not data) for user namespace compatibility.
+    let opts = CString::new(format!("size={size}")).map_err(|e| format!("CString: {e}"))?;
 
     let ret = unsafe {
         libc::mount(
             source.as_ptr(),
             target_c.as_ptr(),
             fstype.as_ptr(),
-            0,
+            libc::MS_NOSUID | libc::MS_NODEV,
             opts.as_ptr().cast(),
         )
     };

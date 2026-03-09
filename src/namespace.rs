@@ -30,6 +30,7 @@ struct NamespaceState {
     cgroup: Option<Cgroup>,
     killed_by: Option<ResourceViolation>,
     stack: Option<Vec<u8>>,
+    staged_init: Option<PathBuf>,
 }
 
 pub struct NamespaceCapsule {
@@ -49,6 +50,7 @@ impl NamespaceCapsule {
                 cgroup: None,
                 killed_by: None,
                 stack: None,
+                staged_init: None,
             })),
             timeout_cancel: None,
         }
@@ -110,6 +112,7 @@ impl CapsuleHandle for NamespaceCapsule {
         state.child_pid = Some(spawn.child_pid);
         state.cgroup = Some(spawn.cgroup);
         state.stack = Some(spawn.stack);
+        state.staged_init = Some(spawn.staged_init);
         drop(state);
 
         self.install_timeout_watchdog(spawn.child_pid);
@@ -174,6 +177,9 @@ impl CapsuleHandle for NamespaceCapsule {
         let killed_by = state.killed_by;
         let _ = state.cgroup.take();
         let _ = state.stack.take();
+        if let Some(staged) = state.staged_init.take() {
+            let _ = std::fs::remove_file(&staged);
+        }
 
         Ok(CapsuleReport {
             exit_code,
@@ -192,6 +198,27 @@ struct NamespaceSpawn {
     stderr: tokio::fs::File,
     cgroup: Cgroup,
     stack: Vec<u8>,
+    staged_init: PathBuf,
+}
+
+struct StagedInitGuard(Option<PathBuf>);
+
+impl StagedInitGuard {
+    fn new(path: PathBuf) -> Self {
+        Self(Some(path))
+    }
+
+    fn into_inner(mut self) -> PathBuf {
+        self.0.take().expect("staged init path missing")
+    }
+}
+
+impl Drop for StagedInitGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 fn do_clone(
@@ -201,6 +228,12 @@ fn do_clone(
     env: HashMap<String, String>,
 ) -> Result<NamespaceSpawn, std::io::Error> {
     let init_binary = resolve_init_binary(spec)?;
+
+    // Copy init binary to a world-accessible temp path. Inside a user
+    // namespace the process loses CAP_DAC_OVERRIDE in the parent namespace,
+    // so it cannot traverse directories like /home/user (mode 700).
+    let init_binary = stage_init_binary(&init_binary)?;
+    let staged_init = StagedInitGuard::new(init_binary.clone());
     let (child_stdin_r_owned, host_stdin_w_owned) =
         nix::unistd::pipe().map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
     let child_stdin_r = child_stdin_r_owned.into_raw_fd();
@@ -250,6 +283,9 @@ fn do_clone(
         format!("{workspace_size}m"),
     ));
     env.push(("ZK_INIT_TMP_SIZE".into(), "64m".into()));
+    if matches!(security, crate::types::SecurityProfile::Hardened) {
+        env.push(("ZK_ROOTFS_READY".into(), "1".into()));
+    }
 
     let mut stack = vec![0_u8; 8 * 1024 * 1024];
     let clone_flags = CloneFlags::CLONE_NEWUSER
@@ -341,7 +377,28 @@ fn do_clone(
         stderr,
         cgroup,
         stack,
+        staged_init: staged_init.into_inner(),
     })
+}
+
+/// Copy init binary to /tmp with world-readable+executable permissions.
+/// Inside a user namespace the child loses CAP_DAC_OVERRIDE in the parent
+/// namespace, so paths under user home directories (mode 700) are inaccessible.
+fn stage_init_binary(src: &std::path::Path) -> std::io::Result<PathBuf> {
+    static STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let name = format!(
+        "zk-init-{}-{}",
+        std::process::id(),
+        STAGE_COUNTER.fetch_add(1, Ordering::Relaxed),
+    );
+    let dest = std::env::temp_dir().join(name);
+    std::fs::copy(src, &dest)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(dest)
 }
 
 fn child_main(
@@ -370,27 +427,49 @@ fn child_main(
         libc::close(stderr_fd);
     }
 
-    // Hardened: pivot_root + capabilities drop + seccomp
-    if matches!(security, crate::types::SecurityProfile::Hardened) {
-        let new_root = std::path::PathBuf::from(format!("/tmp/zk-rootfs-{}", std::process::id()));
-        if crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host).is_err() {
-            return -1;
-        }
-
-        // Drop all capabilities from bounding set
-        unsafe {
-            for cap in 0..=40 {
-                libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0);
+    // Hardened: pivot_root + capabilities drop + seccomp.
+    // After pivot_root the original /tmp path is inaccessible, so stage the
+    // init binary inside the new rootfs before pivoting.
+    let init_binary_path: std::path::PathBuf =
+        if matches!(security, crate::types::SecurityProfile::Hardened) {
+            let new_root =
+                std::path::PathBuf::from(format!("/tmp/zk-rootfs-{}", std::process::id()));
+            if std::fs::create_dir_all(&new_root).is_err() {
+                return -1;
             }
-        }
+            let staged = new_root.join("zk-init");
+            if std::fs::copy(init_binary, &staged).is_err() {
+                return -1;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
+            }
 
-        // Install seccomp filter (must be after PR_SET_NO_NEW_PRIVS)
-        if crate::seccomp::install_seccomp_filter().is_err() {
-            return -1;
-        }
-    }
+            if crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host).is_err() {
+                return -1;
+            }
 
-    let init_binary = match CString::new(init_binary.to_string_lossy().as_bytes()) {
+            // Drop all capabilities from bounding set
+            unsafe {
+                for cap in 0..=40 {
+                    libc::prctl(libc::PR_CAPBSET_DROP, cap, 0, 0, 0);
+                }
+            }
+
+            // Install seccomp filter (must be after PR_SET_NO_NEW_PRIVS)
+            if crate::seccomp::install_seccomp_filter().is_err() {
+                return -1;
+            }
+
+            // After pivot, the staged binary is at /zk-init
+            std::path::PathBuf::from("/zk-init")
+        } else {
+            init_binary.clone()
+        };
+
+    let init_binary = match CString::new(init_binary_path.to_string_lossy().as_bytes()) {
         Ok(binary) => binary,
         Err(_) => return -1,
     };

@@ -60,6 +60,8 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_getsockopt,
         libc::SYS_getsockname,
         libc::SYS_getpeername,
+        libc::SYS_fork,
+        libc::SYS_vfork,
         libc::SYS_clone,
         libc::SYS_clone3,
         libc::SYS_execve,
@@ -137,6 +139,13 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_mlock,
         libc::SYS_munlock,
         libc::SYS_rseq,
+        libc::SYS_gettid,
+        libc::SYS_statx,
+        libc::SYS_close_range,
+        libc::SYS_getpgrp,
+        libc::SYS_setpgid,
+        libc::SYS_setsid,
+        libc::SYS_getrusage,
     ]
 }
 

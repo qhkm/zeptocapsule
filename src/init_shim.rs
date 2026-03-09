@@ -258,7 +258,11 @@ pub fn run_init_shim() -> Result<(), String> {
     }
 
     let (config, worker, worker_args) = init_command_from_env_and_args()?;
-    setup_guest_fs(&config)?;
+    // Skip mount operations when rootfs was already set up (Hardened namespace
+    // profile calls setup_and_pivot before seccomp, so mount is blocked here).
+    if std::env::var_os("ZK_ROOTFS_READY").is_none() {
+        setup_guest_fs(&config)?;
+    }
 
     let status = Command::new(&worker)
         .args(&worker_args)
