@@ -172,6 +172,7 @@ pub struct CapsuleReport {
     pub killed_by: Option<ResourceViolation>,
     pub wall_time: Duration,
     pub peak_memory_mib: Option<u64>,
+    pub init_error: Option<String>,
 }
 
 #[cfg(test)]

@@ -31,6 +31,7 @@ struct NamespaceState {
     killed_by: Option<ResourceViolation>,
     stack: Option<Vec<u8>>,
     staged_init: Option<PathBuf>,
+    diag_read: Option<RawFd>,
 }
 
 pub struct NamespaceCapsule {
@@ -51,6 +52,7 @@ impl NamespaceCapsule {
                 killed_by: None,
                 stack: None,
                 staged_init: None,
+                diag_read: None,
             })),
             timeout_cancel: None,
         }
@@ -113,6 +115,7 @@ impl CapsuleHandle for NamespaceCapsule {
         state.cgroup = Some(spawn.cgroup);
         state.stack = Some(spawn.stack);
         state.staged_init = Some(spawn.staged_init);
+        state.diag_read = Some(spawn.diag_read);
         drop(state);
 
         self.install_timeout_watchdog(spawn.child_pid);
@@ -170,6 +173,19 @@ impl CapsuleHandle for NamespaceCapsule {
             }
         }
 
+        let init_error = if let Some(diag_fd) = state.diag_read.take() {
+            let mut buf = [0u8; 4096];
+            let n = nix::unistd::read(diag_fd, &mut buf).unwrap_or(0);
+            let _ = nix::unistd::close(diag_fd);
+            if n > 0 {
+                Some(String::from_utf8_lossy(&buf[..n]).into_owned())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let peak_memory_mib = state.cgroup.as_ref().and_then(Cgroup::peak_memory_mib);
         if state.killed_by.is_none() {
             state.killed_by = state.cgroup.as_ref().and_then(Cgroup::detect_violation);
@@ -187,6 +203,7 @@ impl CapsuleHandle for NamespaceCapsule {
             killed_by,
             wall_time: self.started_at.elapsed(),
             peak_memory_mib,
+            init_error,
         })
     }
 }
@@ -199,6 +216,7 @@ struct NamespaceSpawn {
     cgroup: Cgroup,
     stack: Vec<u8>,
     staged_init: PathBuf,
+    diag_read: RawFd,
 }
 
 struct StagedInitGuard(Option<PathBuf>);
@@ -254,6 +272,11 @@ fn do_clone(
     let sync_r = sync_r_owned.into_raw_fd();
     let sync_w = sync_w_owned.into_raw_fd();
 
+    let (diag_r_owned, diag_w_owned) =
+        nix::unistd::pipe().map_err(|e| std::io::Error::from_raw_os_error(e as i32))?;
+    let diag_r = diag_r_owned.into_raw_fd();
+    let diag_w = diag_w_owned.into_raw_fd();
+
     let workspace = spec.workspace.guest_path.clone();
     let workspace_host = spec.workspace.host_path.clone();
     let workspace_size = spec.workspace.size_mib.unwrap_or(128);
@@ -307,6 +330,7 @@ fn do_clone(
                     child_stdin_r,
                     child_stdout_w,
                     child_stderr_w,
+                    diag_w,
                     security,
                     &workspace,
                     workspace_host.as_deref(),
@@ -323,6 +347,7 @@ fn do_clone(
     let _ = nix::unistd::close(child_stdout_w);
     let _ = nix::unistd::close(child_stderr_w);
     let _ = nix::unistd::close(sync_r);
+    let _ = nix::unistd::close(diag_w);
 
     if let Err(error) = write_uid_gid_maps(child_pid) {
         unsafe { libc::write(sync_w, [1_u8].as_ptr().cast(), 1) };
@@ -378,6 +403,7 @@ fn do_clone(
         cgroup,
         stack,
         staged_init: staged_init.into_inner(),
+        diag_read: diag_r,
     })
 }
 
@@ -401,6 +427,13 @@ fn stage_init_binary(src: &std::path::Path) -> std::io::Result<PathBuf> {
     Ok(dest)
 }
 
+/// Write a diagnostic message to the diag pipe and return -1 (child exit).
+fn child_bail(diag_fd: RawFd, msg: &str) -> isize {
+    let bytes = msg.as_bytes();
+    unsafe { libc::write(diag_fd, bytes.as_ptr().cast(), bytes.len()) };
+    -1
+}
+
 fn child_main(
     init_binary: &PathBuf,
     worker_binary: &str,
@@ -410,6 +443,7 @@ fn child_main(
     stdin_fd: RawFd,
     stdout_fd: RawFd,
     stderr_fd: RawFd,
+    diag_fd: RawFd,
     security: crate::types::SecurityProfile,
     workspace_guest: &std::path::Path,
     workspace_host: Option<&std::path::Path>,
@@ -417,6 +451,8 @@ fn child_main(
     let mut sync_byte = [0_u8; 1];
     unsafe { libc::read(sync_read, sync_byte.as_mut_ptr().cast(), 1) };
     unsafe { libc::close(sync_read) };
+
+    unsafe { libc::fcntl(diag_fd, libc::F_SETFD, libc::FD_CLOEXEC) };
 
     unsafe {
         libc::dup2(stdin_fd, libc::STDIN_FILENO);
@@ -434,12 +470,12 @@ fn child_main(
         if matches!(security, crate::types::SecurityProfile::Hardened) {
             let new_root =
                 std::path::PathBuf::from(format!("/tmp/zk-rootfs-{}", std::process::id()));
-            if std::fs::create_dir_all(&new_root).is_err() {
-                return -1;
+            if let Err(e) = std::fs::create_dir_all(&new_root) {
+                return child_bail(diag_fd, &format!("rootfs: mkdir {}: {e}", new_root.display()));
             }
             let staged = new_root.join("zk-init");
-            if std::fs::copy(init_binary, &staged).is_err() {
-                return -1;
+            if let Err(e) = std::fs::copy(init_binary, &staged) {
+                return child_bail(diag_fd, &format!("rootfs: copy zk-init: {e}"));
             }
             #[cfg(unix)]
             {
@@ -447,8 +483,8 @@ fn child_main(
                 let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
             }
 
-            if crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host).is_err() {
-                return -1;
+            if let Err(e) = crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host) {
+                return child_bail(diag_fd, &format!("rootfs: pivot: {e}"));
             }
 
             // Drop all capabilities from bounding set
@@ -459,8 +495,8 @@ fn child_main(
             }
 
             // Install seccomp filter (must be after PR_SET_NO_NEW_PRIVS)
-            if crate::seccomp::install_seccomp_filter().is_err() {
-                return -1;
+            if let Err(e) = crate::seccomp::install_seccomp_filter() {
+                return child_bail(diag_fd, &format!("seccomp: {e}"));
             }
 
             // After pivot, the staged binary is at /zk-init
@@ -471,12 +507,12 @@ fn child_main(
 
     let init_binary = match CString::new(init_binary_path.to_string_lossy().as_bytes()) {
         Ok(binary) => binary,
-        Err(_) => return -1,
+        Err(_) => return child_bail(diag_fd, "init binary path contains NUL"),
     };
 
     let worker_binary = match CString::new(worker_binary) {
         Ok(binary) => binary,
-        Err(_) => return -1,
+        Err(_) => return child_bail(diag_fd, "worker binary path contains NUL"),
     };
     let worker_args = worker_args
         .iter()
@@ -484,7 +520,7 @@ fn child_main(
         .collect::<Result<Vec<_>, _>>();
     let worker_args = match worker_args {
         Ok(args) => args,
-        Err(_) => return -1,
+        Err(_) => return child_bail(diag_fd, "worker arg contains NUL"),
     };
 
     let argv_cstrings = std::iter::once(init_binary.clone())
@@ -508,7 +544,14 @@ fn child_main(
         .collect::<Vec<_>>();
 
     unsafe { libc::execve(init_binary.as_ptr(), argv.as_ptr(), envp.as_ptr()) };
-    -1
+    child_bail(
+        diag_fd,
+        &format!(
+            "execve {}: {}",
+            init_binary_path.display(),
+            std::io::Error::last_os_error()
+        ),
+    )
 }
 
 fn resolve_init_binary(spec: &CapsuleSpec) -> Result<PathBuf, std::io::Error> {

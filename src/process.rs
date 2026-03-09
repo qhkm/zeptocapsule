@@ -249,6 +249,7 @@ impl CapsuleHandle for ProcessCapsule {
             killed_by: state.killed_by,
             wall_time: self.started_at.elapsed(),
             peak_memory_mib: None,
+            init_error: None,
         })
     }
 }

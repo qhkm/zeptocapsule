@@ -848,6 +848,7 @@ impl CapsuleHandle for FirecrackerCapsule {
             killed_by,
             wall_time,
             peak_memory_mib: None,
+            init_error: None,
         })
     }
 }
