@@ -3,7 +3,7 @@ name = "zeptokernel"
 description = "Thin sandbox library for isolated Zepto worker execution"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 repository = "https://github.com/qhkm/zeptokernel"
 
 [dependencies]

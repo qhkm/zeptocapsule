@@ -4,7 +4,7 @@
 
 **Isolation sandbox for AI agents — process, namespace, and Firecracker capsules.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-nightly-orange.svg)](https://www.rust-lang.org/)
 [![Linux](https://img.shields.io/badge/Linux-full_support-brightgreen.svg)]()
 [![macOS](https://img.shields.io/badge/macOS-process_only-yellow.svg)]()
@@ -316,7 +316,7 @@ cargo check --target x86_64-unknown-linux-gnu
 
 ## 📄 License
 
-[MIT](LICENSE)
+[Apache 2.0](LICENSE)
 
 Made with 🦀 by [Kitakod Ventures](https://github.com/qhkm)
 
