@@ -311,6 +311,19 @@ ZeptoCapsule (sandbox — isolation, resource enforcement, stdio transport)
 
 ---
 
+## 🧩 Zepto Stack
+
+ZeptoCapsule is part of the Zepto stack — a modular system for running AI agents in production.
+
+| Layer | Repo | Role |
+|:------|:-----|:-----|
+| **ZeptoPM** | [qhkm/zeptopm](https://github.com/qhkm/zeptopm) | Process manager — config-driven daemon, HTTP API, pipelines, orchestration |
+| **ZeptoCapsule** | [qhkm/zeptocapsule](https://github.com/qhkm/zeptocapsule) | Sandbox — process/namespace/Firecracker isolation, resource limits, fallback chains |
+| **ZeptoRT** | [qhkm/zeptort](https://github.com/qhkm/zeptort) | Durable runtime — journaled effects, snapshot recovery, OTP-style supervision |
+| **ZeptoClaw** | [qhkm/zeptoclaw](https://github.com/qhkm/zeptoclaw) | Agent framework — 32 tools, 9 providers, 9 channels, container isolation |
+
+---
+
 ## 🤝 Contributing
 
 ```bash
