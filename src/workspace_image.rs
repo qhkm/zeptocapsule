@@ -140,6 +140,7 @@ fn mount_image(image: &Path, mount_point: &Path) -> KernelResult<()> {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // future: mount workspace image read-only before handoff
 fn mount_image_ro(image: &Path, mount_point: &Path) -> KernelResult<()> {
     use std::process::Command;
 

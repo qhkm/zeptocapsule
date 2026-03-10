@@ -63,7 +63,7 @@ pub fn create(spec: CapsuleSpec) -> KernelResult<Capsule> {
     spec.validate().map_err(KernelError::InvalidState)?;
 
     match try_create(&spec) {
-        Ok(capsule) => return Ok(capsule),
+        Ok(capsule) => Ok(capsule),
         Err(KernelError::NotSupported(msg)) => {
             if let Some(ref chain) = spec.fallback {
                 for &(iso, sec) in chain {

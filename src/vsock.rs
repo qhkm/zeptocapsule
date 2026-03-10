@@ -21,6 +21,7 @@ pub fn is_connect_ok(line: &str) -> bool {
     line.trim().starts_with("OK")
 }
 
+#[allow(dead_code)] // used by Firecracker backend when vsock stdio is wired up
 pub async fn connect(socket_path: &Path, port: u32) -> KernelResult<UnixStream> {
     // Retry CONNECT until the guest has bound to the port.
     // The guest zk-init may still be booting when the host tries to connect.

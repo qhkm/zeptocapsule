@@ -13,6 +13,7 @@ use std::path::Path;
 pub struct BindMount {
     pub host: String,
     pub guest: String,
+    #[allow(dead_code)] // future: enforce RO bind mounts in pivot_root setup
     pub readonly: bool,
 }
 

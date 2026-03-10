@@ -28,28 +28,6 @@ pub fn format_put_request(path: &str, body: &str) -> String {
     )
 }
 
-pub fn parse_response(raw: &str) -> Result<ApiResponse, String> {
-    let (header, body) = raw
-        .split_once("\r\n\r\n")
-        .ok_or_else(|| "missing header/body separator".to_string())?;
-
-    let status_line = header
-        .lines()
-        .next()
-        .ok_or_else(|| "empty response".to_string())?;
-
-    let status: u16 = status_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| "missing status code".to_string())?
-        .parse()
-        .map_err(|e| format!("invalid status code: {e}"))?;
-
-    Ok(ApiResponse {
-        status,
-        body: body.to_string(),
-    })
-}
 
 pub async fn put(socket_path: &Path, path: &str, body: &str) -> KernelResult<ApiResponse> {
     let mut stream = UnixStream::connect(socket_path)
@@ -183,22 +161,6 @@ mod tests {
         assert!(req.contains("Content-Type: application/json\r\n"));
         assert!(req.contains("Content-Length: 16\r\n"));
         assert!(req.ends_with(r#"{"vcpu_count":2}"#));
-    }
-
-    #[test]
-    fn parse_response_204() {
-        let raw = "HTTP/1.1 204 No Content\r\nServer: Firecracker\r\n\r\n";
-        let resp = parse_response(raw).unwrap();
-        assert_eq!(resp.status, 204);
-        assert!(resp.body.is_empty());
-    }
-
-    #[test]
-    fn parse_response_with_body() {
-        let raw = "HTTP/1.1 400 Bad Request\r\nContent-Length: 13\r\n\r\n{\"error\":\"x\"}";
-        let resp = parse_response(raw).unwrap();
-        assert_eq!(resp.status, 400);
-        assert_eq!(resp.body, r#"{"error":"x"}"#);
     }
 
     #[test]

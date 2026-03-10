@@ -64,13 +64,9 @@ impl ProcessCapsule {
                         libc::kill(pid as i32, libc::SIGKILL);
                     }
                     #[cfg(not(unix))]
-                    {
-                        let _ = pid;
-                    }
-                    if let Ok(mut locked) = state.lock() {
-                        if locked.killed_by.is_none() {
-                            locked.killed_by = Some(ResourceViolation::WallClock);
-                        }
+                    let _ = pid;
+                    if let Ok(mut locked) = state.lock() && locked.killed_by.is_none() {
+                        locked.killed_by = Some(ResourceViolation::WallClock);
                     }
                 }
                 _ = rx => {}
