@@ -5,6 +5,7 @@
 
 /// List of allowed syscall numbers for Hardened profile.
 pub fn allowed_syscalls() -> Vec<i64> {
+    #[allow(unused_mut)] // mut needed on x86_64 for extend_from_slice; not on aarch64
     let mut syscalls = vec![
         // ── I/O ──
         libc::SYS_read,
@@ -57,8 +58,6 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_timerfd_gettime,
 
         // ── Process ──
-        libc::SYS_fork,
-        libc::SYS_vfork,
         libc::SYS_clone,
         libc::SYS_clone3,
         libc::SYS_execve,
@@ -149,6 +148,8 @@ pub fn allowed_syscalls() -> Vec<i64> {
     #[cfg(target_arch = "x86_64")]
     {
         syscalls.extend_from_slice(&[
+            libc::SYS_fork,
+            libc::SYS_vfork,
             libc::SYS_open,
             libc::SYS_stat,
             libc::SYS_lstat,
