@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Unit tests across Ubuntu LTS versions
+  unit-tests:
+    name: Unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --lib
+
+  # Namespace integration tests — need real Linux kernel + root
+  namespace-tests:
+    name: Namespace integration tests (ubuntu-${{ matrix.ubuntu }})
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["22.04", "24.04"]
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build tests
+        run: cargo build --tests
+      - name: Run namespace integration tests
+        run: sudo env ZK_RUN_NAMESPACE_TESTS=1 $(which cargo) test --test namespace_backend -- --test-threads=1 --nocapture
+
+  # Process backend integration tests (no root needed)
+  process-tests:
+    name: Process backend tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --test process_backend
+
+  # aarch64 cross-compile check
+  aarch64-check:
+    name: Cross-compile check (aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - name: Install aarch64 cross-linker
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: cargo check for aarch64
+        run: CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+               cargo check --target aarch64-unknown-linux-gnu
+
+  # Clippy + fmt
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy -- -D warnings
