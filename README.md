@@ -278,10 +278,11 @@ println!("Max supported: {:?}/{:?}", max_iso, max_sec);
 ## 🏗️ Architecture
 
 ```
-ZeptoPM (orchestrator)
+ZeptoPM (orchestrator — supervision, retries, job lifecycle)
     │
+    │  create(spec) + spawn(worker, args, env)
     ▼
-ZeptoCapsule
+ZeptoCapsule (sandbox — isolation, resource enforcement, stdio transport)
     │
     ├── probe()          → detect host capabilities
     ├── create(spec)     → pick backend + apply fallback
@@ -293,7 +294,20 @@ ZeptoCapsule
          ├── zk-init (guest) → bootstrap FS, exec worker
          ├── vsock 1001-1004 → stdin/stdout/stderr/control
          └── workspace.ext4  → seed from host, export back
+              │
+              ▼
+         ZeptoClaw (worker — LLM calls, tool use, artifacts)
+              │
+              └── JSON-line IPC over stdin/stdout back to ZeptoPM
 ```
+
+**Stack responsibilities:**
+
+| Layer | Owns | Does NOT own |
+|:------|:-----|:-------------|
+| **ZeptoPM** | Job lifecycle, retries, supervision, event routing | Isolation mechanisms |
+| **ZeptoCapsule** | Capsule creation, process isolation, resource limits, stdio transport | Worker protocol, job meaning |
+| **ZeptoClaw** | LLM API calls, tool execution, artifact production | Sandbox setup, resource enforcement |
 
 ---
 
