@@ -34,10 +34,10 @@ Implemented:
 - [x] Runtime robustness — capability probing, child diagnostic pipe, arch-aware seccomp, fallback chain, enhanced reporting
 - [x] aarch64 cross-compile — verified clean `cargo check --target aarch64-unknown-linux-gnu`
 - [x] CI pipeline — GitHub Actions with multi-distro testing, aarch64 check, clippy -D warnings
+- [x] ZeptoPM integration — confirmed end-to-end on jawiat VPS: Process and Namespace capsules spawn workers, IPC works, CapsuleReport correct
 
 ## Remaining TODO
 
-- [ ] Confirm ZeptoPM integration against the pushed `zeptocapsule` API on Linux (blocked on ZeptoPM repo)
 - [ ] Document guest rootfs/kernel artifact flow for Firecracker deployment (`scripts/build-fc-rootfs.sh` exists but no deployment guide)
 
 ## Key Files
