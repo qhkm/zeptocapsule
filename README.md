@@ -345,7 +345,7 @@ cargo check --target x86_64-unknown-linux-gnu
 
 [Apache 2.0](LICENSE)
 
-Made with 🦀 by [Aisar Labs](https://github.com/qhkm)
+Made with 🦀 by [Aisar Labs](https://aisar.ai)
 
 </div>
 
