@@ -348,3 +348,5 @@ cargo check --target x86_64-unknown-linux-gnu
 Made with 🦀 by [Aisar Labs](https://github.com/qhkm)
 
 </div>
+
+For commercial licensing, enterprise support, or managed hosting inquiries: **qaiyyum@aisar.ai**
