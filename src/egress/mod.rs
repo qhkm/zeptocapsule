@@ -8,6 +8,8 @@
 //! Reference impl studied: <https://github.com/brexhq/CrabTrap>.
 
 pub mod ca;
+#[cfg(target_os = "linux")]
+pub mod fc_net;
 pub mod judge;
 #[cfg(target_os = "linux")]
 pub mod netns;

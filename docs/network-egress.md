@@ -80,7 +80,7 @@ node fetch, axios) honor these out of the box.
 |-------------|--------------|-------|
 | Process     | ✅ supported | Proxy bound on host loopback; env-var injection. |
 | Namespace   | ✅ supported | Per-capsule veth + 169.254.32.X /30, proxy bound on host-side veth IP, no NAT path means proxy is the only egress. Requires `CAP_NET_ADMIN` + `CAP_SYS_ADMIN` (root or `--privileged` Docker). |
-| Firecracker | ❌ rejected  | Needs vsock-routed proxy; tracked.           |
+| Firecracker | ✅ supported | Per-capsule TAP + 169.254.33.X /30 (separate range from Namespace), proxy bound on host-side TAP IP. zk-init configures eth0 + default route inside the guest from `ZK_FC_GUEST_IP`/`ZK_FC_HOST_IP` env vars. Requires `CAP_NET_ADMIN` on host **and** `/dev/kvm`. |
 
 `zeptocapsule::create()` rejects an `egress` policy on Namespace or
 Firecracker backends with a clear error rather than silently failing
@@ -323,12 +323,6 @@ and tighten before applying to Standard / Hardened.
 
 ## Troubleshooting
 
-### "egress policy is not yet enforced for Firecracker isolation"
-
-You set `egress` on a Firecracker spec. v1 supports egress on the
-Process and Namespace backends only; switch to `Isolation::Namespace`
-(with appropriate caps) or remove the policy.
-
 ### Namespace egress: "egress veth setup failed"
 
 The proxy needs `CAP_NET_ADMIN` + `CAP_SYS_ADMIN` to create the veth
@@ -377,7 +371,6 @@ proxies fine), this is transparent.
 
 ## Limitations (v1)
 
-- **Process + Namespace backends only.** Firecracker pending.
 - **HTTP/1.1 only.** No HTTP/2 ALPN passthrough; no QUIC.
 - **No keep-alive re-evaluation on HTTPS.** Once a CONNECT tunnel is
   open and phase 2 has allowed the first inner request, subsequent

@@ -196,4 +196,58 @@ mod firecracker_tests {
             "expected NotSupported, got: {err}"
         );
     }
+
+    #[tokio::test]
+    async fn firecracker_capsule_with_egress_injects_proxy_env() {
+        if skip_unless_enabled() {
+            return;
+        }
+
+        let mut spec = test_config();
+        spec.egress = Some(zeptocapsule::EgressPolicy::deny_all());
+        let mut capsule = zeptocapsule::create(spec).unwrap();
+
+        let child = capsule
+            .spawn(
+                "/bin/sh",
+                &[
+                    "-c",
+                    "printf '%s|%s|%s' \"$HTTP_PROXY\" \"$HTTPS_PROXY\" \"$SSL_CERT_FILE\"",
+                ],
+                HashMap::new(),
+            )
+            .unwrap();
+
+        use tokio::io::AsyncReadExt;
+        let mut stdout = child.stdout;
+        drop(child.stderr);
+        drop(child.stdin);
+
+        let mut buf = [0u8; 4096];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(10), stdout.read(&mut buf))
+            .await
+            .expect("stdout read timed out")
+            .expect("stdout read error");
+        drop(stdout);
+
+        let output = String::from_utf8_lossy(&buf[..n]).into_owned();
+        let parts: Vec<&str> = output.split('|').collect();
+        assert_eq!(parts.len(), 3, "got: {output}");
+        assert!(
+            parts[0].starts_with("http://169.254.33."),
+            "HTTP_PROXY should point at the per-capsule TAP IP, got: {}",
+            parts[0]
+        );
+        assert!(
+            parts[2].contains("zk-egress-fc-ca-"),
+            "SSL_CERT_FILE missing FC CA temp path: {}",
+            parts[2]
+        );
+
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        let report = capsule.destroy().unwrap();
+        // No egress request was made (printf doesn't go through the proxy),
+        // so the audit log is empty.
+        assert!(report.egress_log.is_empty());
+    }
 }

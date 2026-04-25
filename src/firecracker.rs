@@ -4,6 +4,7 @@
 //! VM lifecycle: create state_dir -> spawn (boot VM) -> kill (signal worker) -> destroy (teardown).
 
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,11 @@ use tokio::net::UnixStream;
 use tokio::sync::oneshot;
 
 use crate::backend::{Backend, CapsuleChild, CapsuleHandle, KernelError, KernelResult};
+use crate::egress::ca::CapsuleCa;
+use crate::egress::fc_net::{self, TapSetup};
+use crate::egress::judge::JudgeClient;
+use crate::egress::proxy::{self, ProxyConfig, ProxyHandle};
+use crate::egress::rules::CompiledPolicy;
 use crate::types::{CapsuleReport, CapsuleSpec, FirecrackerConfig, ResourceViolation, Signal};
 
 const WORKER_GUEST_PATH: &str = "/run/zeptocapsule/worker";
@@ -378,6 +384,10 @@ impl Backend for FirecrackerBackend {
         validate_prerequisites(&config)?;
 
         let state_dir = create_state_dir()?;
+        let egress = match &spec.egress {
+            Some(policy) => Some(start_fc_egress(policy)?),
+            None => None,
+        };
 
         Ok(Box::new(FirecrackerCapsule {
             spec,
@@ -390,6 +400,7 @@ impl Backend for FirecrackerBackend {
             started_at: Instant::now(),
             killed_by: Arc::new(Mutex::new(None)),
             timeout_cancel: None,
+            egress,
         }))
     }
 }
@@ -405,6 +416,17 @@ pub struct FirecrackerCapsule {
     started_at: Instant,
     killed_by: Arc<Mutex<Option<ResourceViolation>>>,
     timeout_cancel: Option<oneshot::Sender<()>>,
+    egress: Option<FcEgressRuntime>,
+}
+
+/// Per-capsule egress runtime for the Firecracker backend. Owns the
+/// proxy, the host-side TAP, the CA cert temp file, and the env vars to
+/// inject into the guest's worker.
+struct FcEgressRuntime {
+    proxy: ProxyHandle,
+    tap: TapSetup,
+    ca_cert_path: PathBuf,
+    env: Vec<(String, String)>,
 }
 
 impl FirecrackerCapsule {
@@ -441,11 +463,20 @@ impl CapsuleHandle for FirecrackerCapsule {
         &mut self,
         binary: &str,
         args: &[&str],
-        env: HashMap<String, String>,
+        mut env: HashMap<String, String>,
     ) -> KernelResult<CapsuleChild> {
         use crate::firecracker_api as api;
         use crate::vsock;
         use crate::workspace_image;
+
+        // Inject egress env (HTTP_PROXY, ZK_FC_GUEST_IP, etc.) before the
+        // payload is staged so zk-init can see it. Caller-supplied env
+        // wins on collision via the entry().or_insert_with pattern.
+        if let Some(ref e) = self.egress {
+            for (k, v) in &e.env {
+                env.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
 
         let api_socket = api_socket_path(&self.state_dir);
         let vsock_socket = vsock_socket_path(&self.state_dir);
@@ -513,8 +544,15 @@ impl CapsuleHandle for FirecrackerCapsule {
             // Run async Firecracker API calls on a dedicated thread to avoid
             // "cannot block_on from within a runtime" when called from async context.
             let kernel_path = self.config.kernel_path.to_string_lossy().to_string();
-            let enable_network = self.config.enable_network;
-            let tap_name = self.config.tap_name.clone();
+            // When egress is configured, override enable_network + tap_name to
+            // attach the per-capsule TAP. The proxy on the host side of the
+            // TAP is already running; the guest will pick up eth0 once the
+            // FC API call below adds it.
+            let (enable_network, tap_name) = if let Some(ref e) = self.egress {
+                (true, Some(e.tap.iface.clone()))
+            } else {
+                (self.config.enable_network, self.config.tap_name.clone())
+            };
             let rootfs_str = rootfs_copy.to_string_lossy().to_string();
             let ws_str = ws_image.to_string_lossy().to_string();
             let vsock_str = vsock_socket.to_string_lossy().to_string();
@@ -842,6 +880,22 @@ impl CapsuleHandle for FirecrackerCapsule {
             let _ = std::fs::remove_dir_all(&self.state_dir);
         }
 
+        let egress_log = match self.egress.take() {
+            Some(e) => {
+                let log = e.proxy.drain_audit_log();
+                e.proxy.shutdown();
+                if let Err(err) = std::fs::remove_file(&e.ca_cert_path) {
+                    tracing::debug!(
+                        "failed to remove CA cert temp file at {}: {err}",
+                        e.ca_cert_path.display()
+                    );
+                }
+                fc_net::teardown(e.tap);
+                log
+            }
+            None => Vec::new(),
+        };
+
         Ok(CapsuleReport {
             exit_code,
             exit_signal,
@@ -851,7 +905,7 @@ impl CapsuleHandle for FirecrackerCapsule {
             init_error: None,
             actual_isolation: Some(crate::types::Isolation::Firecracker),
             actual_security: Some(self.spec.security),
-            egress_log: Vec::new(),
+            egress_log,
         })
     }
 }
@@ -925,6 +979,102 @@ fn extract_serial_hint(log: &str) -> Option<String> {
     } else {
         Some(hints.join("\n"))
     }
+}
+
+/// Build and start the per-capsule TAP + proxy + CA cert temp file for
+/// the Firecracker backend. Errors at any step roll back partial state.
+fn start_fc_egress(policy: &crate::egress::EgressPolicy) -> KernelResult<FcEgressRuntime> {
+    let compiled = CompiledPolicy::compile(policy)
+        .map_err(|e| KernelError::InvalidState(format!("egress policy compile failed: {e}")))?;
+    let ca = CapsuleCa::generate()
+        .map_err(|e| KernelError::SpawnFailed(format!("egress CA generation failed: {e}")))?;
+
+    let judge = match &policy.judge {
+        Some(cfg) => Some(
+            JudgeClient::new(cfg.clone())
+                .map_err(|e| KernelError::InvalidState(format!("egress judge init failed: {e}")))?,
+        ),
+        None => None,
+    };
+
+    let tap = fc_net::setup_tap()
+        .map_err(|e| KernelError::SpawnFailed(format!("egress TAP setup failed: {e}")))?;
+
+    let cfg = ProxyConfig {
+        policy: compiled,
+        ca,
+        block_private_networks: policy.block_private_networks,
+        default_action: policy.default_action,
+        judge,
+    };
+    let pem = cfg.ca.ca_cert_pem().to_owned();
+    let bind: SocketAddr = SocketAddr::new(tap.host_ip.into(), 0);
+    let proxy = match proxy::spawn_on(bind, cfg) {
+        Ok(p) => p,
+        Err(e) => {
+            fc_net::teardown(tap);
+            return Err(KernelError::SpawnFailed(format!(
+                "egress proxy bind on {bind} failed: {e}"
+            )));
+        }
+    };
+
+    let ca_cert_path = match write_fc_ca_cert_temp(&pem) {
+        Ok(p) => p,
+        Err(e) => {
+            proxy.shutdown();
+            fc_net::teardown(tap);
+            return Err(e);
+        }
+    };
+
+    let proxy_url = format!("http://{}", proxy.addr);
+    let cert_path_str = ca_cert_path.to_string_lossy().into_owned();
+    let env = vec![
+        // Proxy URL exposed to the worker via the standard env vars.
+        ("HTTP_PROXY".to_owned(), proxy_url.clone()),
+        ("http_proxy".to_owned(), proxy_url.clone()),
+        ("HTTPS_PROXY".to_owned(), proxy_url.clone()),
+        ("https_proxy".to_owned(), proxy_url.clone()),
+        ("ALL_PROXY".to_owned(), proxy_url.clone()),
+        ("all_proxy".to_owned(), proxy_url),
+        ("SSL_CERT_FILE".to_owned(), cert_path_str.clone()),
+        ("REQUESTS_CA_BUNDLE".to_owned(), cert_path_str.clone()),
+        ("NODE_EXTRA_CA_CERTS".to_owned(), cert_path_str.clone()),
+        ("CURL_CA_BUNDLE".to_owned(), cert_path_str),
+        // Network-config hints picked up by zk-init in FC mode to bring up
+        // eth0 + install the default route inside the guest.
+        (
+            "ZK_FC_GUEST_IP".to_owned(),
+            format!("{}/{}", tap.guest_ip, tap.prefix_len),
+        ),
+        ("ZK_FC_HOST_IP".to_owned(), tap.host_ip.to_string()),
+        ("ZK_FC_GUEST_IFACE".to_owned(), "eth0".to_owned()),
+    ];
+
+    Ok(FcEgressRuntime {
+        proxy,
+        tap,
+        ca_cert_path,
+        env,
+    })
+}
+
+fn write_fc_ca_cert_temp(pem: &str) -> KernelResult<PathBuf> {
+    let mut path = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    path.push(format!(
+        "zk-egress-fc-ca-{}-{nanos}.pem",
+        std::process::id()
+    ));
+    std::fs::write(&path, pem)
+        .map_err(|e| KernelError::SpawnFailed(format!("write FC CA temp file: {e}")))?;
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    Ok(path)
 }
 
 #[cfg(test)]

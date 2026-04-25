@@ -138,6 +138,12 @@ fn run_fc_init_shim() -> Result<(), String> {
         let config = load_fc_init_config()?;
         setup_fc_guest_fs(&config)?;
 
+        // If the host injected egress network config, bring up eth0 inside
+        // the guest before the worker spawns. Failure here is best-effort —
+        // we log via the serial console and let the worker decide what to do
+        // (most workers will fail their first HTTP call, surfacing the issue).
+        configure_fc_egress_network(&config.worker_env);
+
         let stdin_listener = vsock_listen(crate::vsock::PORT_STDIN)?;
         let stdout_listener = vsock_listen(crate::vsock::PORT_STDOUT)?;
         let stderr_listener = vsock_listen(crate::vsock::PORT_STDERR)?;
@@ -324,6 +330,43 @@ fn load_fc_init_config() -> Result<FcInitConfig, String> {
         tmp_size: read_trimmed_file(PathBuf::from(FC_TMP_SIZE_FILE).as_path())?
             .unwrap_or_else(|| "64m".to_string()),
     })
+}
+
+/// Configure eth0 inside the Firecracker guest using `busybox ip` (Alpine
+/// minirootfs ships with busybox, which provides `/sbin/ip`).
+///
+/// Reads ZK_FC_GUEST_IP, ZK_FC_HOST_IP, ZK_FC_GUEST_IFACE from the env
+/// pairs. If any is missing the function is a no-op — egress is opt-in.
+#[cfg(target_os = "linux")]
+fn configure_fc_egress_network(worker_env: &[(String, String)]) {
+    let lookup = |key: &str| -> Option<&str> {
+        worker_env
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    };
+    let guest_ip = match lookup("ZK_FC_GUEST_IP") {
+        Some(v) => v,
+        None => return,
+    };
+    let host_ip = match lookup("ZK_FC_HOST_IP") {
+        Some(v) => v,
+        None => return,
+    };
+    let iface = lookup("ZK_FC_GUEST_IFACE").unwrap_or("eth0");
+
+    let _ = Command::new("ip")
+        .args(["addr", "add", guest_ip, "dev", iface])
+        .status();
+    let _ = Command::new("ip")
+        .args(["link", "set", iface, "up"])
+        .status();
+    let _ = Command::new("ip")
+        .args(["link", "set", "lo", "up"])
+        .status();
+    let _ = Command::new("ip")
+        .args(["route", "add", "default", "via", host_ip])
+        .status();
 }
 
 #[cfg(target_os = "linux")]

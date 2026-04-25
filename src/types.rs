@@ -98,17 +98,6 @@ impl CapsuleSpec {
             }
         }
 
-        // Egress policy is enforced by Process and Namespace backends.
-        // Firecracker still needs vsock-routed proxy plumbing — fail loud
-        // rather than ship an unenforced policy.
-        if self.egress.is_some() && matches!(self.isolation, Isolation::Firecracker) {
-            return Err(format!(
-                "egress policy is not yet enforced for {:?} isolation; \
-                 only Process and Namespace backends support egress in v1",
-                self.isolation
-            ));
-        }
-
         Ok(())
     }
 }
@@ -529,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_egress_on_firecracker_backend() {
+    fn validate_accepts_egress_on_firecracker_backend() {
         let spec = CapsuleSpec {
             isolation: Isolation::Firecracker,
             security: SecurityProfile::Standard,
@@ -545,8 +534,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let err = spec.validate().unwrap_err();
-        assert!(err.contains("egress"), "error should mention egress: {err}");
+        assert!(spec.validate().is_ok());
     }
 
     #[test]
