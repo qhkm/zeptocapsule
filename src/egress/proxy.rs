@@ -108,9 +108,16 @@ struct ProxyState {
 }
 
 /// Spawn the proxy task and return a handle. Binds to `127.0.0.1:0`.
-pub async fn spawn(config: ProxyConfig) -> io::Result<ProxyHandle> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let addr = listener.local_addr()?;
+///
+/// Synchronous bind so this can be called from `Backend::create`. The
+/// accept loop runs on the ambient tokio runtime, which must be active —
+/// in practice it always is because [`crate::create`] is invoked from
+/// async code.
+pub fn spawn(config: ProxyConfig) -> io::Result<ProxyHandle> {
+    let std_listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    std_listener.set_nonblocking(true)?;
+    let addr = std_listener.local_addr()?;
+    let listener = TcpListener::from_std(std_listener)?;
 
     let (audit_tx, audit_rx) = mpsc::unbounded_channel();
     let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
@@ -772,7 +779,6 @@ mod tests {
             default_action: policy.default_action,
             judge: None,
         })
-        .await
         .unwrap()
     }
 

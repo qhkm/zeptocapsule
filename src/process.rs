@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -7,13 +8,17 @@ use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
 
 use crate::backend::{Backend, CapsuleChild, CapsuleHandle, KernelError, KernelResult};
+use crate::egress::ca::CapsuleCa;
+use crate::egress::judge::JudgeClient;
+use crate::egress::proxy::{self, ProxyConfig, ProxyHandle};
+use crate::egress::rules::CompiledPolicy;
 use crate::types::{CapsuleReport, CapsuleSpec, ResourceViolation, Signal};
 
 pub struct ProcessBackend;
 
 impl Backend for ProcessBackend {
     fn create(&self, spec: CapsuleSpec) -> KernelResult<Box<dyn CapsuleHandle>> {
-        Ok(Box::new(ProcessCapsule::new(spec)))
+        ProcessCapsule::new(spec).map(|c| Box::new(c) as Box<dyn CapsuleHandle>)
     }
 }
 
@@ -29,11 +34,24 @@ pub struct ProcessCapsule {
     started_at: Instant,
     state: Arc<Mutex<ProcessState>>,
     timeout_cancel: Option<oneshot::Sender<()>>,
+    egress: Option<EgressRuntime>,
+}
+
+/// Per-capsule egress runtime: the proxy, the CA cert temp file path, and
+/// the env-var bundle injected into the child process.
+struct EgressRuntime {
+    proxy: ProxyHandle,
+    ca_cert_path: PathBuf,
+    env: Vec<(String, String)>,
 }
 
 impl ProcessCapsule {
-    fn new(spec: CapsuleSpec) -> Self {
-        Self {
+    fn new(spec: CapsuleSpec) -> KernelResult<Self> {
+        let egress = match &spec.egress {
+            Some(policy) => Some(start_egress(policy)?),
+            None => None,
+        };
+        Ok(Self {
             spec,
             started_at: Instant::now(),
             state: Arc::new(Mutex::new(ProcessState {
@@ -43,7 +61,8 @@ impl ProcessCapsule {
                 killed_by: None,
             })),
             timeout_cancel: None,
-        }
+            egress,
+        })
     }
 
     fn install_timeout_watchdog(&mut self, pid: u32) {
@@ -105,6 +124,12 @@ impl CapsuleHandle for ProcessCapsule {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Inject egress env first so callers can override individual vars.
+        if let Some(ref e) = self.egress {
+            for (k, v) in &e.env {
+                cmd.env(k, v);
+            }
+        }
         for (key, value) in env {
             cmd.env(key, value);
         }
@@ -239,6 +264,21 @@ impl CapsuleHandle for ProcessCapsule {
             }
         }
 
+        let egress_log = match self.egress.take() {
+            Some(e) => {
+                let log = e.proxy.drain_audit_log();
+                e.proxy.shutdown();
+                if let Err(err) = std::fs::remove_file(&e.ca_cert_path) {
+                    tracing::debug!(
+                        "failed to remove CA cert temp file at {}: {err}",
+                        e.ca_cert_path.display()
+                    );
+                }
+                log
+            }
+            None => Vec::new(),
+        };
+
         Ok(CapsuleReport {
             exit_code: state.exit_code,
             exit_signal: state.exit_signal,
@@ -248,9 +288,77 @@ impl CapsuleHandle for ProcessCapsule {
             init_error: None,
             actual_isolation: Some(crate::types::Isolation::Process),
             actual_security: Some(crate::types::SecurityProfile::Dev),
-            egress_log: Vec::new(),
+            egress_log,
         })
     }
+}
+
+/// Build and start the per-capsule proxy + CA cert temp file. Errors here
+/// fail capsule creation; we'd rather surface a setup failure than start a
+/// capsule that thinks it has an egress gate but actually doesn't.
+fn start_egress(policy: &crate::egress::EgressPolicy) -> KernelResult<EgressRuntime> {
+    let compiled = CompiledPolicy::compile(policy)
+        .map_err(|e| KernelError::InvalidState(format!("egress policy compile failed: {e}")))?;
+    let ca = CapsuleCa::generate()
+        .map_err(|e| KernelError::SpawnFailed(format!("egress CA generation failed: {e}")))?;
+
+    let judge = match &policy.judge {
+        Some(cfg) => Some(
+            JudgeClient::new(cfg.clone())
+                .map_err(|e| KernelError::InvalidState(format!("egress judge init failed: {e}")))?,
+        ),
+        None => None,
+    };
+
+    let cfg = ProxyConfig {
+        policy: compiled,
+        ca,
+        block_private_networks: policy.block_private_networks,
+        default_action: policy.default_action,
+        judge,
+    };
+    let pem = cfg.ca.ca_cert_pem().to_owned();
+    let proxy = proxy::spawn(cfg)
+        .map_err(|e| KernelError::SpawnFailed(format!("egress proxy bind failed: {e}")))?;
+
+    let ca_cert_path = write_ca_cert_temp(&pem)?;
+    let proxy_url = format!("http://{}", proxy.addr);
+    let cert_path_str = ca_cert_path.to_string_lossy().into_owned();
+    let env = vec![
+        ("HTTP_PROXY".to_owned(), proxy_url.clone()),
+        ("http_proxy".to_owned(), proxy_url.clone()),
+        ("HTTPS_PROXY".to_owned(), proxy_url.clone()),
+        ("https_proxy".to_owned(), proxy_url.clone()),
+        ("ALL_PROXY".to_owned(), proxy_url.clone()),
+        ("all_proxy".to_owned(), proxy_url),
+        ("SSL_CERT_FILE".to_owned(), cert_path_str.clone()),
+        ("REQUESTS_CA_BUNDLE".to_owned(), cert_path_str.clone()),
+        ("NODE_EXTRA_CA_CERTS".to_owned(), cert_path_str.clone()),
+        ("CURL_CA_BUNDLE".to_owned(), cert_path_str),
+    ];
+
+    Ok(EgressRuntime {
+        proxy,
+        ca_cert_path,
+        env,
+    })
+}
+
+fn write_ca_cert_temp(pem: &str) -> KernelResult<PathBuf> {
+    let mut path = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    path.push(format!("zk-egress-ca-{}-{nanos}.pem", std::process::id()));
+    std::fs::write(&path, pem)
+        .map_err(|e| KernelError::SpawnFailed(format!("write CA temp file: {e}")))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(path)
 }
 
 #[cfg(unix)]

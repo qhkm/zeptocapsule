@@ -118,3 +118,65 @@ async fn process_capsule_dev_rlimit_kills_memory_hog() {
     // At minimum, verify the capsule lifecycle completes cleanly
     assert!(report.wall_time.as_nanos() > 0);
 }
+
+#[tokio::test]
+async fn process_capsule_with_egress_injects_proxy_env() {
+    let policy = zeptocapsule::EgressPolicy::allow_all();
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec {
+        egress: Some(policy),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let mut child = capsule
+        .spawn(
+            "/bin/sh",
+            &[
+                "-c",
+                "printf '%s|%s|%s' \"$HTTP_PROXY\" \"$HTTPS_PROXY\" \"$SSL_CERT_FILE\"",
+            ],
+            HashMap::new(),
+        )
+        .unwrap();
+
+    let mut output = String::new();
+    child.stdout.read_to_string(&mut output).await.unwrap();
+    let parts: Vec<&str> = output.split('|').collect();
+    assert_eq!(parts.len(), 3, "got: {output}");
+    assert!(
+        parts[0].starts_with("http://127.0.0.1:"),
+        "HTTP_PROXY not loopback: {}",
+        parts[0]
+    );
+    assert_eq!(parts[0], parts[1], "HTTP_PROXY and HTTPS_PROXY differ");
+    assert!(
+        parts[2].contains("zk-egress-ca-"),
+        "SSL_CERT_FILE missing CA temp path: {}",
+        parts[2]
+    );
+    let ca_path = std::path::PathBuf::from(parts[2]);
+    assert!(
+        ca_path.exists(),
+        "CA cert temp file should exist while capsule lives"
+    );
+
+    drop(child);
+    let report = capsule.destroy().unwrap();
+    assert!(
+        !ca_path.exists(),
+        "CA cert temp file should be removed on destroy"
+    );
+    // No actual egress happened, so the audit log is empty.
+    assert!(report.egress_log.is_empty());
+}
+
+#[tokio::test]
+async fn process_capsule_without_egress_has_empty_audit_log() {
+    let mut capsule = zeptocapsule::create(zeptocapsule::CapsuleSpec::default()).unwrap();
+    let mut child = capsule.spawn("/bin/echo", &["hi"], HashMap::new()).unwrap();
+    let mut buf = String::new();
+    child.stdout.read_to_string(&mut buf).await.unwrap();
+    drop(child);
+    let report = capsule.destroy().unwrap();
+    assert!(report.egress_log.is_empty());
+}
