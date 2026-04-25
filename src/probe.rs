@@ -57,7 +57,10 @@ pub fn parse_kernel_version(text: &str) -> Option<(u32, u32, u32)> {
 
     let major = parts[0].parse::<u32>().ok()?;
     let minor = parts[1].parse::<u32>().ok()?;
-    let patch = parts.get(2).and_then(|p| p.parse::<u32>().ok()).unwrap_or(0);
+    let patch = parts
+        .get(2)
+        .and_then(|p| p.parse::<u32>().ok())
+        .unwrap_or(0);
 
     Some((major, minor, patch))
 }

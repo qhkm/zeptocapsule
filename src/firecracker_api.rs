@@ -28,7 +28,6 @@ pub fn format_put_request(path: &str, body: &str) -> String {
     )
 }
 
-
 pub async fn put(socket_path: &Path, path: &str, body: &str) -> KernelResult<ApiResponse> {
     let mut stream = UnixStream::connect(socket_path)
         .await

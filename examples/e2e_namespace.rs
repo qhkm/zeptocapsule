@@ -31,6 +31,7 @@ async fn main() {
         security_overrides: Default::default(),
         firecracker: None,
         fallback: None,
+        egress: None,
     };
 
     std::fs::create_dir_all("/tmp/zk-e2e-ns-test").unwrap();
@@ -44,10 +45,7 @@ async fn main() {
     let child = capsule
         .spawn(
             "/bin/sh",
-            &[
-                "-c",
-                "cat /workspace/input.txt && echo FROM_NAMESPACE",
-            ],
+            &["-c", "cat /workspace/input.txt && echo FROM_NAMESPACE"],
             HashMap::new(),
         )
         .expect("spawn failed");

@@ -248,6 +248,7 @@ impl CapsuleHandle for ProcessCapsule {
             init_error: None,
             actual_isolation: Some(crate::types::Isolation::Process),
             actual_security: Some(crate::types::SecurityProfile::Dev),
+            egress_log: Vec::new(),
         })
     }
 }

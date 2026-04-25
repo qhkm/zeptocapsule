@@ -30,7 +30,6 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_ioctl,
         libc::SYS_getdents64,
         libc::SYS_readlinkat,
-
         // ── Memory ──
         libc::SYS_mmap,
         libc::SYS_mprotect,
@@ -42,7 +41,6 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_mlock,
         libc::SYS_munlock,
         libc::SYS_memfd_create,
-
         // ── Pipes and polling ──
         libc::SYS_pipe2,
         libc::SYS_dup,
@@ -56,7 +54,6 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_timerfd_create,
         libc::SYS_timerfd_settime,
         libc::SYS_timerfd_gettime,
-
         // ── Process ──
         libc::SYS_clone,
         libc::SYS_clone3,
@@ -79,20 +76,17 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_set_robust_list,
         libc::SYS_get_robust_list,
         libc::SYS_rseq,
-
         // ── Signals ──
         libc::SYS_rt_sigaction,
         libc::SYS_rt_sigprocmask,
         libc::SYS_rt_sigreturn,
         libc::SYS_sigaltstack,
-
         // ── User/group IDs ──
         libc::SYS_getuid,
         libc::SYS_getgid,
         libc::SYS_geteuid,
         libc::SYS_getegid,
         libc::SYS_getgroups,
-
         // ── Networking ──
         libc::SYS_socket,
         libc::SYS_sendto,
@@ -110,7 +104,6 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_getsockopt,
         libc::SYS_getsockname,
         libc::SYS_getpeername,
-
         // ── Filesystem metadata ──
         libc::SYS_renameat,
         libc::SYS_renameat2,
@@ -121,7 +114,6 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_fchmod,
         libc::SYS_fchmodat,
         libc::SYS_umask,
-
         // ── Time ──
         libc::SYS_clock_gettime,
         libc::SYS_clock_getres,
@@ -129,7 +121,6 @@ pub fn allowed_syscalls() -> Vec<i64> {
         libc::SYS_nanosleep,
         libc::SYS_sched_yield,
         libc::SYS_getrandom,
-
         // ── Misc ──
         libc::SYS_uname,
         libc::SYS_getcwd,
@@ -302,34 +293,16 @@ mod tests {
             allowed.contains(&libc::SYS_newfstatat),
             "missing newfstatat"
         );
-        assert!(
-            allowed.contains(&libc::SYS_faccessat),
-            "missing faccessat"
-        );
+        assert!(allowed.contains(&libc::SYS_faccessat), "missing faccessat");
         assert!(allowed.contains(&libc::SYS_pipe2), "missing pipe2");
         assert!(allowed.contains(&libc::SYS_dup3), "missing dup3");
-        assert!(
-            allowed.contains(&libc::SYS_pselect6),
-            "missing pselect6"
-        );
-        assert!(
-            allowed.contains(&libc::SYS_renameat2),
-            "missing renameat2"
-        );
-        assert!(
-            allowed.contains(&libc::SYS_unlinkat),
-            "missing unlinkat"
-        );
+        assert!(allowed.contains(&libc::SYS_pselect6), "missing pselect6");
+        assert!(allowed.contains(&libc::SYS_renameat2), "missing renameat2");
+        assert!(allowed.contains(&libc::SYS_unlinkat), "missing unlinkat");
         assert!(allowed.contains(&libc::SYS_mkdirat), "missing mkdirat");
-        assert!(
-            allowed.contains(&libc::SYS_symlinkat),
-            "missing symlinkat"
-        );
+        assert!(allowed.contains(&libc::SYS_symlinkat), "missing symlinkat");
         assert!(allowed.contains(&libc::SYS_linkat), "missing linkat");
-        assert!(
-            allowed.contains(&libc::SYS_fchmodat),
-            "missing fchmodat"
-        );
+        assert!(allowed.contains(&libc::SYS_fchmodat), "missing fchmodat");
         assert!(
             allowed.contains(&libc::SYS_readlinkat),
             "missing readlinkat"

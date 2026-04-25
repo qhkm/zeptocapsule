@@ -20,6 +20,7 @@ async fn main() {
         security_overrides: Default::default(),
         firecracker: None,
         fallback: None,
+        egress: None,
     };
 
     std::fs::create_dir_all("/tmp/zk-e2e-test").unwrap();

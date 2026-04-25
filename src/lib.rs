@@ -1,7 +1,8 @@
 mod backend;
+pub mod egress;
 mod init_shim;
-mod process;
 mod probe;
+mod process;
 mod types;
 
 #[cfg(target_os = "linux")]
@@ -25,6 +26,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub use backend::{CapsuleChild, CapsuleStderr};
+pub use egress::{
+    EgressAction, EgressDecision, EgressPolicy, EgressRule, HostMatch, JudgeConfig, Method,
+    PathMatch,
+};
 pub use init_shim::{
     FcInitConfig, MountConfig, is_firecracker_mode, is_init, parse_fc_init_config, run_init_shim,
     setup_guest_fs,

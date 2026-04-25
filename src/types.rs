@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::egress::{EgressDecision, EgressPolicy};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Isolation {
     Process,
@@ -46,6 +48,10 @@ pub struct CapsuleSpec {
     pub security_overrides: SecurityOverrides,
     pub firecracker: Option<FirecrackerConfig>,
     pub fallback: Option<Vec<(Isolation, SecurityProfile)>>,
+    /// Outbound HTTP/HTTPS policy. `None` keeps the pre-M7 passthrough
+    /// behavior (any host reachable). Future backend milestones wire this
+    /// into a per-capsule proxy.
+    pub egress: Option<EgressPolicy>,
 }
 
 impl CapsuleSpec {
@@ -107,6 +113,7 @@ impl Default for CapsuleSpec {
             security_overrides: SecurityOverrides::default(),
             firecracker: None,
             fallback: None,
+            egress: None,
         }
     }
 }
@@ -178,6 +185,23 @@ pub enum SecurityProfile {
     Hardened,
 }
 
+impl SecurityProfile {
+    /// Recommended egress policy starting point for this tier.
+    ///
+    /// - `Dev` → `None` (passthrough; opt in explicitly when testing rules).
+    /// - `Standard` and `Hardened` → deny-all + private-network block,
+    ///   forcing the caller to add an explicit allowlist.
+    ///
+    /// The judge config is left `None`; callers attach one when they want
+    /// LLM-judge fallback (recommended for `Hardened`).
+    pub fn default_egress(self) -> Option<EgressPolicy> {
+        match self {
+            SecurityProfile::Dev => None,
+            SecurityProfile::Standard | SecurityProfile::Hardened => Some(EgressPolicy::deny_all()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SecurityOverrides {
     pub cgroup_required: Option<bool>,
@@ -210,6 +234,9 @@ pub struct CapsuleReport {
     pub init_error: Option<String>,
     pub actual_isolation: Option<Isolation>,
     pub actual_security: Option<SecurityProfile>,
+    /// Per-capsule egress decision audit trail. Empty when no
+    /// [`EgressPolicy`] was attached. Order is request order.
+    pub egress_log: Vec<EgressDecision>,
 }
 
 #[cfg(test)]
@@ -442,5 +469,40 @@ mod tests {
             ..Default::default()
         };
         assert!(spec.validate().is_ok());
+    }
+
+    #[test]
+    fn capsule_spec_default_has_no_egress_policy() {
+        let spec = CapsuleSpec::default();
+        assert!(
+            spec.egress.is_none(),
+            "default must be passthrough for backwards compat"
+        );
+    }
+
+    #[test]
+    fn dev_tier_default_egress_is_none() {
+        assert!(SecurityProfile::Dev.default_egress().is_none());
+    }
+
+    #[test]
+    fn standard_tier_default_egress_is_deny_all() {
+        let p = SecurityProfile::Standard.default_egress().unwrap();
+        assert_eq!(p.default_action, crate::egress::EgressAction::Deny);
+        assert!(p.block_private_networks);
+        assert!(p.rules.is_empty());
+    }
+
+    #[test]
+    fn hardened_tier_default_egress_is_deny_all() {
+        let p = SecurityProfile::Hardened.default_egress().unwrap();
+        assert_eq!(p.default_action, crate::egress::EgressAction::Deny);
+        assert!(p.block_private_networks);
+    }
+
+    #[test]
+    fn capsule_report_default_has_empty_egress_log() {
+        let report = CapsuleReport::default();
+        assert!(report.egress_log.is_empty());
     }
 }

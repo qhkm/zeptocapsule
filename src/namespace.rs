@@ -206,6 +206,7 @@ impl CapsuleHandle for NamespaceCapsule {
             init_error,
             actual_isolation: Some(crate::types::Isolation::Namespace),
             actual_security: Some(self.spec.security),
+            egress_log: Vec::new(),
         })
     }
 }
@@ -475,7 +476,10 @@ fn child_main(
             let new_root =
                 std::path::PathBuf::from(format!("/tmp/zk-rootfs-{}", std::process::id()));
             if let Err(e) = std::fs::create_dir_all(&new_root) {
-                return child_bail(diag_fd, &format!("rootfs: mkdir {}: {e}", new_root.display()));
+                return child_bail(
+                    diag_fd,
+                    &format!("rootfs: mkdir {}: {e}", new_root.display()),
+                );
             }
             let staged = new_root.join("zk-init");
             if let Err(e) = std::fs::copy(init_binary, &staged) {
@@ -487,7 +491,9 @@ fn child_main(
                 let _ = std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755));
             }
 
-            if let Err(e) = crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host) {
+            if let Err(e) =
+                crate::rootfs::setup_and_pivot(&new_root, workspace_guest, workspace_host)
+            {
                 return child_bail(diag_fd, &format!("rootfs: pivot: {e}"));
             }
 

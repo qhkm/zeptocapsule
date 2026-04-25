@@ -39,7 +39,24 @@ Implemented:
 
 ## Remaining TODO
 
-All tasks complete. See `docs/firecracker-deployment.md` for the Firecracker artifact guide.
+### Network Egress Policy Layer (M7)
+
+> **Motivation:** ZeptoCapsule today isolates filesystem, namespace, and process resources, but agent outbound HTTP/HTTPS is not policy-gated. CrabTrap (https://github.com/brexhq/CrabTrap) is a focused egress proxy that demonstrates the right shape: deterministic rules first, LLM-judge fallback, full audit trail. Pull those ideas into ZeptoCapsule as a first-class network policy layer so capsules can constrain *what* an agent talks to, not just *how* it runs.
+>
+> Design doc: `docs/plans/2026-04-25-network-egress-policy-design.md`
+>
+> Reference implementation to study: https://github.com/brexhq/CrabTrap (Go, MIT-style scope).
+
+- [x] **Egress policy spec** — `EgressPolicy`, `EgressRule`, `EgressAction`, `HostMatch`, `PathMatch`, `Method`, `JudgeConfig`, `EgressDecision` defined in `src/egress/types.rs` with serde derives. `CapsuleSpec.egress` and `CapsuleReport.egress_log` wired. `SecurityProfile::default_egress()` returns per-tier starting policy
+- [ ] **In-capsule HTTP/HTTPS interceptor** — local proxy bound to capsule loopback, env-injected `HTTP_PROXY`/`HTTPS_PROXY` for guest, per-host CA cert generation for TLS MITM (mirror CrabTrap's TLS termination model)
+- [x] **Static rule engine** — `src/egress/rules.rs`: `CompiledPolicy::compile()` + `evaluate()`. Exact/Suffix/Glob host matching (case-insensitive), method filter, Exact/Prefix/Glob path matching. First-match-wins. 13 unit tests
+- [x] **SSRF + DNS-rebind defense** (classifier only) — `src/egress/ssrf.rs`: `classify_ip()` covers RFC1918, loopback, link-local, CGN (100.64/10), AWS IMDS v4+v6, IPv6 ULA, IPv4-mapped bypass guard. 16 unit tests. DNS pinning lives in the proxy layer (next milestone)
+- [ ] **LLM-judge fallback (optional)** — when no static rule matches, ask configurable LLM endpoint with JSON-encoded request + JSON-escaped policy text (prompt-injection hardening, per CrabTrap), 30s timeout, circuit breaker (5 fails → 10s cooldown)
+- [ ] **Audit trail** — append-only egress log per capsule (request, decision, rule_id or judge_reason), surfaced in `CapsuleReport` and optionally streamed to ZeptoPM
+- [ ] **Auto policy-builder** — offline tool that reads audit logs from a Dev-tier capsule run and drafts a Standard-tier `EgressPolicy` (mirror CrabTrap's policy-builder loop)
+- [ ] **Backend integration** — wire interceptor into Process backend (loopback proxy), Namespace backend (network namespace + veth), Firecracker backend (vsock-routed proxy on host)
+- [ ] **Tests** — unit tests for rule matching, integration tests for static deny / static allow / LLM-judge / fallback denial / SSRF block, replay-of-audit-log evaluator
+- [ ] **Docs** — `docs/network-egress.md` covering policy authoring, tier defaults, LLM judge config, troubleshooting
 
 ## Key Files
 
