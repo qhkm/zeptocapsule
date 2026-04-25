@@ -98,20 +98,13 @@ impl CapsuleSpec {
             }
         }
 
-        // Egress policy is currently only enforced by the Process backend.
-        // The Namespace and Firecracker backends need veth + iptables (or
-        // vsock-routed) plumbing that's tracked as a follow-up. Refusing
-        // creation here is the safer default — better to fail loudly than
-        // to ship an unenforced policy.
-        if self.egress.is_some()
-            && matches!(
-                self.isolation,
-                Isolation::Namespace | Isolation::Firecracker
-            )
-        {
+        // Egress policy is enforced by Process and Namespace backends.
+        // Firecracker still needs vsock-routed proxy plumbing — fail loud
+        // rather than ship an unenforced policy.
+        if self.egress.is_some() && matches!(self.isolation, Isolation::Firecracker) {
             return Err(format!(
                 "egress policy is not yet enforced for {:?} isolation; \
-                 only Process backend supports egress in v1",
+                 only Process and Namespace backends support egress in v1",
                 self.isolation
             ));
         }
@@ -525,15 +518,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_egress_on_namespace_backend() {
+    fn validate_accepts_egress_on_namespace_backend() {
         let spec = CapsuleSpec {
             isolation: Isolation::Namespace,
             security: SecurityProfile::Standard,
             egress: Some(crate::egress::EgressPolicy::deny_all()),
             ..Default::default()
         };
-        let err = spec.validate().unwrap_err();
-        assert!(err.contains("egress"), "error should mention egress: {err}");
+        assert!(spec.validate().is_ok());
     }
 
     #[test]

@@ -224,3 +224,80 @@ fn zk_init_binary() -> PathBuf {
     path.push("zk-init");
     path
 }
+
+#[tokio::test]
+async fn namespace_capsule_with_egress_injects_proxy_env() {
+    if !namespace_tests_enabled() {
+        return;
+    }
+
+    let workspace = unique_workspace("egress-env");
+    let mut spec = namespace_spec(workspace);
+    spec.egress = Some(zeptocapsule::EgressPolicy::deny_all());
+    let mut capsule = zeptocapsule::create(spec).unwrap();
+
+    let mut child = capsule
+        .spawn(
+            "/bin/sh",
+            &[
+                "-c",
+                "printf '%s|%s|%s' \"$HTTP_PROXY\" \"$HTTPS_PROXY\" \"$SSL_CERT_FILE\"",
+            ],
+            HashMap::new(),
+        )
+        .unwrap();
+
+    let mut output = String::new();
+    child.stdout.read_to_string(&mut output).await.unwrap();
+    let parts: Vec<&str> = output.split('|').collect();
+    assert_eq!(parts.len(), 3, "got: {output}");
+    assert!(
+        parts[0].starts_with("http://169.254.32."),
+        "HTTP_PROXY should point at the per-capsule veth IP, got: {}",
+        parts[0]
+    );
+    assert!(
+        parts[2].contains("zk-egress-ca-"),
+        "SSL_CERT_FILE missing CA temp path: {}",
+        parts[2]
+    );
+
+    drop(child);
+    let report = capsule.destroy().unwrap();
+    // Audit log is empty because the test command never made an HTTP request.
+    assert!(report.egress_log.is_empty());
+}
+
+#[tokio::test]
+async fn namespace_capsule_egress_proxy_is_reachable_from_inside() {
+    if !namespace_tests_enabled() {
+        return;
+    }
+
+    // Verify the capsule can connect to the proxy on the host-veth IP.
+    // Without a working veth + route, the connection would fail. Use
+    // /dev/tcp built into bash; if the proxy answers (with anything, including
+    // a 502 since we send a malformed request), the connection succeeded.
+    let workspace = unique_workspace("egress-reach");
+    let mut spec = namespace_spec(workspace);
+    spec.egress = Some(zeptocapsule::EgressPolicy::deny_all());
+    let mut capsule = zeptocapsule::create(spec).unwrap();
+
+    let cmd = "host=$(echo $HTTP_PROXY | sed -e 's|http://||' -e 's|:.*||'); \
+               port=$(echo $HTTP_PROXY | sed 's|.*:||'); \
+               (echo 'GET / HTTP/1.0'; echo) | timeout 3 nc -q1 $host $port; \
+               echo CONN=$?";
+    let mut child = capsule
+        .spawn("/bin/sh", &["-c", cmd], HashMap::new())
+        .unwrap();
+    let mut output = String::new();
+    child.stdout.read_to_string(&mut output).await.unwrap();
+
+    drop(child);
+    let _ = capsule.destroy();
+
+    assert!(
+        output.contains("HTTP/1.1 4") || output.contains("CONN=0"),
+        "expected proxy to answer or nc to exit cleanly, got: {output}"
+    );
+}

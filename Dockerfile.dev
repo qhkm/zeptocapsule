@@ -1,10 +1,12 @@
 FROM rust:latest
 
-# System deps for namespace/cgroup/mount operations and debugging
+# System deps for namespace/cgroup/mount operations + egress veth setup
 RUN apt-get update && apt-get install -y \
     procps \
     cgroup-tools \
     util-linux \
+    iproute2 \
+    iptables \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace

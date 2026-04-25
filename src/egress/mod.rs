@@ -9,6 +9,8 @@
 
 pub mod ca;
 pub mod judge;
+#[cfg(target_os = "linux")]
+pub mod netns;
 pub mod proxy;
 pub mod rules;
 pub mod ssrf;

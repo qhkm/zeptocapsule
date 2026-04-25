@@ -107,14 +107,24 @@ struct ProxyState {
     judge: Option<Arc<JudgeClient>>,
 }
 
-/// Spawn the proxy task and return a handle. Binds to `127.0.0.1:0`.
+/// Spawn the proxy task on `127.0.0.1:0`.
 ///
 /// Synchronous bind so this can be called from `Backend::create`. The
 /// accept loop runs on the ambient tokio runtime, which must be active —
 /// in practice it always is because [`crate::create`] is invoked from
 /// async code.
 pub fn spawn(config: ProxyConfig) -> io::Result<ProxyHandle> {
-    let std_listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    spawn_on("127.0.0.1:0".parse().expect("valid loopback addr"), config)
+}
+
+/// Spawn the proxy task bound to a specific socket address.
+///
+/// Used by the namespace backend to bind the proxy to a per-capsule
+/// host-side veth IP. The IP must already exist on the host (set up via
+/// `ip addr add`) before this call; otherwise `bind` fails with
+/// `EADDRNOTAVAIL`.
+pub fn spawn_on(bind: SocketAddr, config: ProxyConfig) -> io::Result<ProxyHandle> {
+    let std_listener = std::net::TcpListener::bind(bind)?;
     std_listener.set_nonblocking(true)?;
     let addr = std_listener.local_addr()?;
     let listener = TcpListener::from_std(std_listener)?;

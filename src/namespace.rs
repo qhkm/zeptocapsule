@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::CString;
+use std::net::SocketAddr;
 use std::os::fd::{FromRawFd, IntoRawFd, RawFd};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,6 +14,11 @@ use tokio::sync::oneshot;
 
 use crate::backend::{Backend, CapsuleChild, CapsuleHandle, KernelError, KernelResult};
 use crate::cgroup::Cgroup;
+use crate::egress::ca::CapsuleCa;
+use crate::egress::judge::JudgeClient;
+use crate::egress::netns::{self, VethSetup};
+use crate::egress::proxy::{self, ProxyConfig, ProxyHandle};
+use crate::egress::rules::CompiledPolicy;
 use crate::types::{CapsuleReport, CapsuleSpec, ResourceViolation, Signal};
 
 static NEXT_CAPSULE_ID: AtomicU64 = AtomicU64::new(1);
@@ -21,7 +27,7 @@ pub struct NamespaceBackend;
 
 impl Backend for NamespaceBackend {
     fn create(&self, spec: CapsuleSpec) -> KernelResult<Box<dyn CapsuleHandle>> {
-        Ok(Box::new(NamespaceCapsule::new(spec)))
+        NamespaceCapsule::new(spec).map(|c| Box::new(c) as Box<dyn CapsuleHandle>)
     }
 }
 
@@ -39,11 +45,26 @@ pub struct NamespaceCapsule {
     started_at: Instant,
     state: Arc<Mutex<NamespaceState>>,
     timeout_cancel: Option<oneshot::Sender<()>>,
+    egress: Option<NsEgressRuntime>,
+}
+
+/// Per-capsule egress runtime for the Namespace backend. Owns the proxy,
+/// the host-side veth (which gets torn down on `destroy`), the CA cert
+/// temp file, and the env vars to inject into the child.
+struct NsEgressRuntime {
+    proxy: ProxyHandle,
+    veth: VethSetup,
+    ca_cert_path: PathBuf,
+    env: Vec<(String, String)>,
 }
 
 impl NamespaceCapsule {
-    fn new(spec: CapsuleSpec) -> Self {
-        Self {
+    fn new(spec: CapsuleSpec) -> KernelResult<Self> {
+        let egress = match &spec.egress {
+            Some(policy) => Some(start_ns_egress(policy)?),
+            None => None,
+        };
+        Ok(Self {
             spec,
             started_at: Instant::now(),
             state: Arc::new(Mutex::new(NamespaceState {
@@ -55,7 +76,8 @@ impl NamespaceCapsule {
                 diag_read: None,
             })),
             timeout_cancel: None,
-        }
+            egress,
+        })
     }
 
     fn install_timeout_watchdog(&mut self, pid: Pid) {
@@ -96,7 +118,7 @@ impl CapsuleHandle for NamespaceCapsule {
         &mut self,
         binary: &str,
         args: &[&str],
-        env: HashMap<String, String>,
+        mut env: HashMap<String, String>,
     ) -> KernelResult<CapsuleChild> {
         let mut state = self
             .state
@@ -108,7 +130,15 @@ impl CapsuleHandle for NamespaceCapsule {
             ));
         }
 
-        let spawn = do_clone(&self.spec, binary, args, env)
+        // Inject egress env first so caller-supplied env can still override.
+        if let Some(ref e) = self.egress {
+            for (k, v) in &e.env {
+                env.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+        let veth_for_child = self.egress.as_ref().map(|e| e.veth.clone());
+
+        let spawn = do_clone(&self.spec, binary, args, env, veth_for_child)
             .map_err(|e| KernelError::SpawnFailed(e.to_string()))?;
 
         state.child_pid = Some(spawn.child_pid);
@@ -197,6 +227,22 @@ impl CapsuleHandle for NamespaceCapsule {
             let _ = std::fs::remove_file(&staged);
         }
 
+        let egress_log = match self.egress.take() {
+            Some(e) => {
+                let log = e.proxy.drain_audit_log();
+                e.proxy.shutdown();
+                if let Err(err) = std::fs::remove_file(&e.ca_cert_path) {
+                    tracing::debug!(
+                        "failed to remove CA cert temp file at {}: {err}",
+                        e.ca_cert_path.display()
+                    );
+                }
+                netns::teardown(e.veth);
+                log
+            }
+            None => Vec::new(),
+        };
+
         Ok(CapsuleReport {
             exit_code,
             exit_signal,
@@ -206,7 +252,7 @@ impl CapsuleHandle for NamespaceCapsule {
             init_error,
             actual_isolation: Some(crate::types::Isolation::Namespace),
             actual_security: Some(self.spec.security),
-            egress_log: Vec::new(),
+            egress_log,
         })
     }
 }
@@ -247,6 +293,7 @@ fn do_clone(
     binary: &str,
     args: &[&str],
     env: HashMap<String, String>,
+    egress_veth: Option<VethSetup>,
 ) -> Result<NamespaceSpawn, std::io::Error> {
     let init_binary = resolve_init_binary(spec)?;
 
@@ -359,6 +406,24 @@ fn do_clone(
         let _ = nix::sys::signal::kill(child_pid, nix::sys::signal::Signal::SIGKILL);
         let _ = waitpid(child_pid, None);
         return Err(error);
+    }
+
+    // Move the guest veth into the child's netns and configure it before
+    // we let the child run. If this fails, the capsule has no working
+    // network and we'd rather kill the child than start it with a broken
+    // network configuration.
+    if let Some(setup) = egress_veth.as_ref() {
+        if let Err(error) = netns::move_guest_into_netns(setup, child_pid.as_raw()) {
+            unsafe { libc::write(sync_w, [1_u8].as_ptr().cast(), 1) };
+            let _ = nix::unistd::close(sync_w);
+            let _ = nix::unistd::close(diag_r);
+            let _ = nix::sys::signal::kill(child_pid, nix::sys::signal::Signal::SIGKILL);
+            let _ = waitpid(child_pid, None);
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("egress netns setup failed: {error}"),
+            ));
+        }
     }
 
     let capsule_id = format!(
@@ -591,4 +656,91 @@ fn write_uid_gid_maps(child_pid: Pid) -> std::io::Result<()> {
     std::fs::write(format!("/proc/{pid}/setgroups"), "deny\n")?;
     std::fs::write(format!("/proc/{pid}/gid_map"), format!("0 {gid} 1\n"))?;
     Ok(())
+}
+
+/// Build and start the per-capsule proxy + veth + CA cert temp file.
+/// Errors fail capsule creation rather than producing a capsule with a
+/// half-working egress gate.
+fn start_ns_egress(policy: &crate::egress::EgressPolicy) -> KernelResult<NsEgressRuntime> {
+    let compiled = CompiledPolicy::compile(policy)
+        .map_err(|e| KernelError::InvalidState(format!("egress policy compile failed: {e}")))?;
+    let ca = CapsuleCa::generate()
+        .map_err(|e| KernelError::SpawnFailed(format!("egress CA generation failed: {e}")))?;
+
+    let judge = match &policy.judge {
+        Some(cfg) => Some(
+            JudgeClient::new(cfg.clone())
+                .map_err(|e| KernelError::InvalidState(format!("egress judge init failed: {e}")))?,
+        ),
+        None => None,
+    };
+
+    let veth = netns::setup_host_side()
+        .map_err(|e| KernelError::SpawnFailed(format!("egress veth setup failed: {e}")))?;
+
+    let cfg = ProxyConfig {
+        policy: compiled,
+        ca,
+        block_private_networks: policy.block_private_networks,
+        default_action: policy.default_action,
+        judge,
+    };
+    let pem = cfg.ca.ca_cert_pem().to_owned();
+    // Bind proxy to the host-side veth IP on a random port so it's only
+    // reachable from the matching capsule's netns via the veth pair.
+    let bind: SocketAddr = SocketAddr::new(veth.host_ip.into(), 0);
+    let proxy = match proxy::spawn_on(bind, cfg) {
+        Ok(p) => p,
+        Err(e) => {
+            netns::teardown(veth);
+            return Err(KernelError::SpawnFailed(format!(
+                "egress proxy bind on {bind} failed: {e}"
+            )));
+        }
+    };
+
+    let ca_cert_path = match write_ca_cert_temp(&pem) {
+        Ok(p) => p,
+        Err(e) => {
+            proxy.shutdown();
+            netns::teardown(veth);
+            return Err(e);
+        }
+    };
+
+    let proxy_url = format!("http://{}", proxy.addr);
+    let cert_path_str = ca_cert_path.to_string_lossy().into_owned();
+    let env = vec![
+        ("HTTP_PROXY".to_owned(), proxy_url.clone()),
+        ("http_proxy".to_owned(), proxy_url.clone()),
+        ("HTTPS_PROXY".to_owned(), proxy_url.clone()),
+        ("https_proxy".to_owned(), proxy_url.clone()),
+        ("ALL_PROXY".to_owned(), proxy_url.clone()),
+        ("all_proxy".to_owned(), proxy_url),
+        ("SSL_CERT_FILE".to_owned(), cert_path_str.clone()),
+        ("REQUESTS_CA_BUNDLE".to_owned(), cert_path_str.clone()),
+        ("NODE_EXTRA_CA_CERTS".to_owned(), cert_path_str.clone()),
+        ("CURL_CA_BUNDLE".to_owned(), cert_path_str),
+    ];
+
+    Ok(NsEgressRuntime {
+        proxy,
+        veth,
+        ca_cert_path,
+        env,
+    })
+}
+
+fn write_ca_cert_temp(pem: &str) -> KernelResult<PathBuf> {
+    let mut path = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    path.push(format!("zk-egress-ca-{}-{nanos}.pem", std::process::id()));
+    std::fs::write(&path, pem)
+        .map_err(|e| KernelError::SpawnFailed(format!("write CA temp file: {e}")))?;
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    Ok(path)
 }
