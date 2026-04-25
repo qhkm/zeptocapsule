@@ -55,7 +55,7 @@ Implemented:
 - [x] **Audit trail** — `EgressDecision` (serde-serializable, ts as Unix-epoch microseconds) emitted per request via mpsc channel, drained into `CapsuleReport.egress_log` on `destroy()`
 - [x] **Auto policy-builder** — `cargo run --bin zk-policy-build -- --log audit.json --output policy.json`. Drafts a deny-by-default policy with one Allow rule per observed host, methods unioned. 8 unit tests
 - [x] **Process backend integration** — `ProcessCapsule` spawns the proxy + writes 0o600 CA temp file at create, injects `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/`NODE_EXTRA_CA_CERTS`/`CURL_CA_BUNDLE`, drains audit log + cleans temp file on destroy. 2 integration tests
-- [ ] **Namespace backend integration** — deferred. v1 fails capsule creation with a clear error if `egress` is set. Needs veth pair + iptables REDIRECT 80/443 + DNS routing through proxy. Linux + root only
+- [x] **Namespace backend integration** — `src/egress/netns.rs` + `src/namespace.rs`. Per-capsule veth in `169.254.32.0/24` /30 subnets, proxy bound on host-side veth IP, no NAT path means proxy is the only egress. `nsenter` configures guest side from parent (works in Hardened pivot_root mode). 4 unit tests + 2 ZK_RUN_NAMESPACE_TESTS-gated integration tests. Verified end-to-end in privileged Docker (175 tests pass on Linux)
 - [ ] **Firecracker backend integration** — deferred. v1 fails capsule creation with a clear error if `egress` is set. Needs vsock-routed proxy listener + guest `zk-init` iptables shim + CA cert dropped into rootfs at build time
 - [x] **Docs** — `docs/network-egress.md` covering quick start, backend matrix, policy authoring, SSRF, LLM judge, audit log, policy-builder, troubleshooting, v1 limits
 

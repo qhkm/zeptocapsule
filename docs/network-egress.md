@@ -78,8 +78,8 @@ node fetch, axios) honor these out of the box.
 
 | Backend     | Egress in v1 | Notes |
 |-------------|--------------|-------|
-| Process     | ✅ supported | Full enforcement on the host loopback.       |
-| Namespace   | ❌ rejected  | Needs veth + iptables setup; tracked.        |
+| Process     | ✅ supported | Proxy bound on host loopback; env-var injection. |
+| Namespace   | ✅ supported | Per-capsule veth + 169.254.32.X /30, proxy bound on host-side veth IP, no NAT path means proxy is the only egress. Requires `CAP_NET_ADMIN` + `CAP_SYS_ADMIN` (root or `--privileged` Docker). |
 | Firecracker | ❌ rejected  | Needs vsock-routed proxy; tracked.           |
 
 `zeptocapsule::create()` rejects an `egress` policy on Namespace or
@@ -323,11 +323,18 @@ and tighten before applying to Standard / Hardened.
 
 ## Troubleshooting
 
-### "egress policy is not yet enforced for Namespace isolation"
+### "egress policy is not yet enforced for Firecracker isolation"
 
-You set `egress` on a Namespace or Firecracker spec. v1 supports
-egress on the Process backend only; switch to `Isolation::Process` or
-remove the policy.
+You set `egress` on a Firecracker spec. v1 supports egress on the
+Process and Namespace backends only; switch to `Isolation::Namespace`
+(with appropriate caps) or remove the policy.
+
+### Namespace egress: "egress veth setup failed"
+
+The proxy needs `CAP_NET_ADMIN` + `CAP_SYS_ADMIN` to create the veth
+pair and `nsenter` into the child's netns. Re-run as root, with the
+capabilities granted explicitly, or inside `--privileged` Docker. The
+error message includes the underlying `ip` / `nsenter` stderr.
 
 ### Agent reports certificate errors
 
@@ -370,7 +377,7 @@ proxies fine), this is transparent.
 
 ## Limitations (v1)
 
-- **Process backend only.** Namespace + Firecracker pending.
+- **Process + Namespace backends only.** Firecracker pending.
 - **HTTP/1.1 only.** No HTTP/2 ALPN passthrough; no QUIC.
 - **No keep-alive re-evaluation on HTTPS.** Once a CONNECT tunnel is
   open and phase 2 has allowed the first inner request, subsequent
