@@ -32,6 +32,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 use super::ca::CapsuleCa;
+use super::judge::{JudgeClient, JudgeRequest};
 use super::rules::{CompiledPolicy, Request as RuleRequest};
 use super::ssrf::is_private_or_metadata;
 use super::types::{EgressAction, EgressDecision, Method};
@@ -61,6 +62,9 @@ pub struct ProxyConfig {
     /// (or the judge times out / fails open). `Allow` here is dangerous — the
     /// SecurityProfile defaults choose `Deny` for Standard/Hardened.
     pub default_action: EgressAction,
+    /// Optional LLM judge consulted on `EgressAction::Judge`. `None` collapses
+    /// `Judge` to `default_action`.
+    pub judge: Option<JudgeClient>,
 }
 
 /// Handle returned by [`spawn`]. Holds the listening address, the CA cert
@@ -100,6 +104,7 @@ struct ProxyState {
     default_action: EgressAction,
     audit_tx: mpsc::UnboundedSender<EgressDecision>,
     upstream_tls: Arc<ClientConfig>,
+    judge: Option<Arc<JudgeClient>>,
 }
 
 /// Spawn the proxy task and return a handle. Binds to `127.0.0.1:0`.
@@ -127,6 +132,7 @@ pub async fn spawn(config: ProxyConfig) -> io::Result<ProxyHandle> {
         default_action: config.default_action,
         audit_tx,
         upstream_tls,
+        judge: config.judge.map(Arc::new),
     });
 
     tokio::spawn(async move {
@@ -274,25 +280,19 @@ async fn handle_plain(
     let started = Instant::now();
     let (host, port) = parse_authority(&head, 80)?;
 
-    let (decision, matched, ip) = match resolve_and_eval(
-        &state,
-        Method::parse(&head.method).unwrap_or(Method::Get),
-        &host,
-        if head.path.is_empty() {
-            "/"
-        } else {
-            &head.path
-        },
-        port,
-    )
-    .await
-    {
+    let method = Method::parse(&head.method).unwrap_or(Method::Get);
+    let path_for_eval = if head.path.is_empty() {
+        "/"
+    } else {
+        head.path.as_str()
+    };
+    let eval = match resolve_and_eval(&state, method, &host, path_for_eval, port).await {
         Ok(eval) => eval,
         Err(e) => {
             write_error(&mut client, 502, "DNS or SSRF check failed").await?;
             log_decision(
                 &state,
-                Method::parse(&head.method).unwrap_or(Method::Get),
+                method,
                 &format!("{host}{}", head.path),
                 EgressAction::Deny,
                 None,
@@ -303,22 +303,22 @@ async fn handle_plain(
         }
     };
 
-    if decision == EgressAction::Deny {
+    if eval.action == EgressAction::Deny {
         write_error(&mut client, 403, "Egress denied by ZeptoCapsule policy").await?;
         log_decision(
             &state,
-            Method::parse(&head.method).unwrap_or(Method::Get),
+            method,
             &format!("{host}{}", head.path),
             EgressAction::Deny,
-            matched.clone(),
-            None,
+            eval.matched_rule,
+            eval.judge_reason,
             started,
         );
         return Ok(());
     }
 
     // Allow path: connect to pinned IP, replay original request bytes, copy bidi.
-    let upstream_addr = SocketAddr::new(ip, port);
+    let upstream_addr = SocketAddr::new(eval.ip, port);
     let mut upstream =
         match tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(upstream_addr))
             .await
@@ -328,10 +328,10 @@ async fn handle_plain(
                 write_error(&mut client, 502, "upstream connect failed").await?;
                 log_decision(
                     &state,
-                    Method::parse(&head.method).unwrap_or(Method::Get),
+                    method,
                     &format!("{host}{}", head.path),
                     EgressAction::Deny,
-                    matched,
+                    eval.matched_rule,
                     Some(format!("upstream: {e}")),
                     started,
                 );
@@ -341,10 +341,10 @@ async fn handle_plain(
                 write_error(&mut client, 504, "upstream timeout").await?;
                 log_decision(
                     &state,
-                    Method::parse(&head.method).unwrap_or(Method::Get),
+                    method,
                     &format!("{host}{}", head.path),
                     EgressAction::Deny,
-                    matched,
+                    eval.matched_rule,
                     Some("upstream timeout".into()),
                     started,
                 );
@@ -361,11 +361,11 @@ async fn handle_plain(
 
     log_decision(
         &state,
-        Method::parse(&head.method).unwrap_or(Method::Get),
+        method,
         &format!("{host}{}", head.path),
         EgressAction::Allow,
-        matched,
-        None,
+        eval.matched_rule,
+        eval.judge_reason,
         started,
     );
 
@@ -426,27 +426,26 @@ async fn handle_connect(
     let (host, port) = parse_authority(&head, 443)?;
 
     // Phase 1: host-level check at CONNECT time. Path is unknown — use "/".
-    let (decision, matched, ip) =
-        match resolve_and_eval(&state, Method::Connect, &host, "/", port).await {
-            Ok(e) => e,
-            Err(e) => {
-                let _ = client
-                    .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
-                    .await;
-                log_decision(
-                    &state,
-                    Method::Connect,
-                    &format!("{host}:{port}"),
-                    EgressAction::Deny,
-                    None,
-                    Some(format!("resolve: {e}")),
-                    started,
-                );
-                return Ok(());
-            }
-        };
+    let phase1 = match resolve_and_eval(&state, Method::Connect, &host, "/", port).await {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = client
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                .await;
+            log_decision(
+                &state,
+                Method::Connect,
+                &format!("{host}:{port}"),
+                EgressAction::Deny,
+                None,
+                Some(format!("resolve: {e}")),
+                started,
+            );
+            return Ok(());
+        }
+    };
 
-    if decision == EgressAction::Deny {
+    if phase1.action == EgressAction::Deny {
         let _ = client
             .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             .await;
@@ -455,8 +454,8 @@ async fn handle_connect(
             Method::Connect,
             &format!("{host}:{port}"),
             EgressAction::Deny,
-            matched,
-            None,
+            phase1.matched_rule,
+            phase1.judge_reason,
             started,
         );
         return Ok(());
@@ -467,10 +466,11 @@ async fn handle_connect(
         Method::Connect,
         &format!("{host}:{port}"),
         EgressAction::Allow,
-        matched.clone(),
-        None,
+        phase1.matched_rule.clone(),
+        phase1.judge_reason.clone(),
         started,
     );
+    let ip = phase1.ip;
 
     // Tell the client the tunnel is up, then start the TLS MITM.
     client
@@ -514,7 +514,8 @@ async fn handle_connect(
         host: &host,
         path: inner_path,
     });
-    let inner_decision = resolve_judge(&state, inner_eval.action);
+    let (inner_decision, inner_judge_reason) =
+        resolve_judge(&state, inner_eval.action, inner_method, &host, inner_path).await;
 
     if inner_decision == EgressAction::Deny {
         let _ = tls_client
@@ -526,7 +527,7 @@ async fn handle_connect(
             &format!("{host}{inner_path}"),
             EgressAction::Deny,
             inner_eval.matched_rule,
-            None,
+            inner_judge_reason,
             inner_started,
         );
         return Ok(());
@@ -661,14 +662,15 @@ fn parse_authority(head: &ParsedHead, default_port: u16) -> Result<(String, u16)
     }
 }
 
-/// Combined DNS resolution + SSRF check + rule evaluation.
+/// Combined DNS resolution + SSRF check + rule evaluation. The returned
+/// `judge_reason` is populated whenever the judge was consulted.
 async fn resolve_and_eval(
     state: &ProxyState,
     method: Method,
     host: &str,
     path: &str,
     port: u16,
-) -> Result<(EgressAction, Option<String>, IpAddr), ProxyError> {
+) -> Result<ResolvedEval, ProxyError> {
     let mut addrs = tokio::net::lookup_host((host, port))
         .await
         .map_err(|e| ProxyError::BadRequest(format!("dns: {e}")))?;
@@ -677,18 +679,56 @@ async fn resolve_and_eval(
         .ok_or_else(|| ProxyError::BadRequest("dns returned no addrs".into()))?;
     let ip = addr.ip();
     if state.block_private_networks && is_private_or_metadata(ip) {
-        return Ok((EgressAction::Deny, Some("ssrf-block".into()), ip));
+        return Ok(ResolvedEval {
+            action: EgressAction::Deny,
+            matched_rule: Some("ssrf-block".into()),
+            judge_reason: None,
+            ip,
+        });
     }
     let eval = state.policy.evaluate(&RuleRequest { method, host, path });
-    let final_decision = resolve_judge(state, eval.action);
-    Ok((final_decision, eval.matched_rule, ip))
+    let (action, judge_reason) = resolve_judge(state, eval.action, method, host, path).await;
+    Ok(ResolvedEval {
+        action,
+        matched_rule: eval.matched_rule,
+        judge_reason,
+        ip,
+    })
 }
 
-/// `Judge` reduces to `default_action` until step 7 plugs in the LLM judge.
-fn resolve_judge(state: &ProxyState, action: EgressAction) -> EgressAction {
+struct ResolvedEval {
+    action: EgressAction,
+    matched_rule: Option<String>,
+    judge_reason: Option<String>,
+    ip: IpAddr,
+}
+
+/// Resolve a `Judge` action: consult the LLM judge if one is configured,
+/// otherwise fall back to `default_action`. Returns the final action plus
+/// the judge's reason string (when applicable).
+async fn resolve_judge(
+    state: &ProxyState,
+    action: EgressAction,
+    method: Method,
+    host: &str,
+    path: &str,
+) -> (EgressAction, Option<String>) {
     match action {
-        EgressAction::Judge => state.default_action,
-        other => other,
+        EgressAction::Judge => match &state.judge {
+            Some(j) => {
+                let outcome = j
+                    .decide(&JudgeRequest {
+                        method,
+                        host,
+                        path,
+                        body_excerpt: None,
+                    })
+                    .await;
+                (outcome.decision, Some(outcome.reason))
+            }
+            None => (state.default_action, None),
+        },
+        other => (other, None),
     }
 }
 
@@ -730,6 +770,7 @@ mod tests {
             ca,
             block_private_networks: false,
             default_action: policy.default_action,
+            judge: None,
         })
         .await
         .unwrap()

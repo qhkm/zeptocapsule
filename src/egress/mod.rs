@@ -8,6 +8,7 @@
 //! Reference impl studied: <https://github.com/brexhq/CrabTrap>.
 
 pub mod ca;
+pub mod judge;
 pub mod proxy;
 pub mod rules;
 pub mod ssrf;
