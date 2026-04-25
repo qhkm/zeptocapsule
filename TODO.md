@@ -48,15 +48,16 @@ Implemented:
 > Reference implementation to study: https://github.com/brexhq/CrabTrap (Go, MIT-style scope).
 
 - [x] **Egress policy spec** — `EgressPolicy`, `EgressRule`, `EgressAction`, `HostMatch`, `PathMatch`, `Method`, `JudgeConfig`, `EgressDecision` defined in `src/egress/types.rs` with serde derives. `CapsuleSpec.egress` and `CapsuleReport.egress_log` wired. `SecurityProfile::default_egress()` returns per-tier starting policy
-- [ ] **In-capsule HTTP/HTTPS interceptor** — local proxy bound to capsule loopback, env-injected `HTTP_PROXY`/`HTTPS_PROXY` for guest, per-host CA cert generation for TLS MITM (mirror CrabTrap's TLS termination model)
+- [x] **In-capsule HTTP/HTTPS interceptor** — `src/egress/proxy.rs` + `src/egress/ca.rs`. Loopback proxy with TLS MITM, per-capsule CA via `rcgen` (aws_lc_rs), leaf cert cache, IP-pinned upstream connect. HTTP/1.1 only in v1. 9 integration-style tests
 - [x] **Static rule engine** — `src/egress/rules.rs`: `CompiledPolicy::compile()` + `evaluate()`. Exact/Suffix/Glob host matching (case-insensitive), method filter, Exact/Prefix/Glob path matching. First-match-wins. 13 unit tests
-- [x] **SSRF + DNS-rebind defense** (classifier only) — `src/egress/ssrf.rs`: `classify_ip()` covers RFC1918, loopback, link-local, CGN (100.64/10), AWS IMDS v4+v6, IPv6 ULA, IPv4-mapped bypass guard. 16 unit tests. DNS pinning lives in the proxy layer (next milestone)
-- [ ] **LLM-judge fallback (optional)** — when no static rule matches, ask configurable LLM endpoint with JSON-encoded request + JSON-escaped policy text (prompt-injection hardening, per CrabTrap), 30s timeout, circuit breaker (5 fails → 10s cooldown)
-- [ ] **Audit trail** — append-only egress log per capsule (request, decision, rule_id or judge_reason), surfaced in `CapsuleReport` and optionally streamed to ZeptoPM
-- [ ] **Auto policy-builder** — offline tool that reads audit logs from a Dev-tier capsule run and drafts a Standard-tier `EgressPolicy` (mirror CrabTrap's policy-builder loop)
-- [ ] **Backend integration** — wire interceptor into Process backend (loopback proxy), Namespace backend (network namespace + veth), Firecracker backend (vsock-routed proxy on host)
-- [ ] **Tests** — unit tests for rule matching, integration tests for static deny / static allow / LLM-judge / fallback denial / SSRF block, replay-of-audit-log evaluator
-- [ ] **Docs** — `docs/network-egress.md` covering policy authoring, tier defaults, LLM judge config, troubleshooting
+- [x] **SSRF + DNS-rebind defense** — `src/egress/ssrf.rs`: `classify_ip()` covers RFC1918, loopback, link-local, CGN (100.64/10), AWS IMDS v4+v6, IPv6 ULA, IPv4-mapped bypass guard. DNS pinning happens at the proxy on resolve. 16 unit tests
+- [x] **LLM-judge fallback** — `src/egress/judge.rs`: OpenAI-compatible chat-completion client over the existing tokio + tokio-rustls stack, prompt-injection-hardened (policy text JSON-escaped, request fields as typed JSON), strict-JSON response schema validation, 5-fail/10s circuit breaker. 14 unit tests. Wired into proxy via `ProxyConfig::judge`
+- [x] **Audit trail** — `EgressDecision` (serde-serializable, ts as Unix-epoch microseconds) emitted per request via mpsc channel, drained into `CapsuleReport.egress_log` on `destroy()`
+- [x] **Auto policy-builder** — `cargo run --bin zk-policy-build -- --log audit.json --output policy.json`. Drafts a deny-by-default policy with one Allow rule per observed host, methods unioned. 8 unit tests
+- [x] **Process backend integration** — `ProcessCapsule` spawns the proxy + writes 0o600 CA temp file at create, injects `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/`NODE_EXTRA_CA_CERTS`/`CURL_CA_BUNDLE`, drains audit log + cleans temp file on destroy. 2 integration tests
+- [ ] **Namespace backend integration** — deferred. v1 fails capsule creation with a clear error if `egress` is set. Needs veth pair + iptables REDIRECT 80/443 + DNS routing through proxy. Linux + root only
+- [ ] **Firecracker backend integration** — deferred. v1 fails capsule creation with a clear error if `egress` is set. Needs vsock-routed proxy listener + guest `zk-init` iptables shim + CA cert dropped into rootfs at build time
+- [x] **Docs** — `docs/network-egress.md` covering quick start, backend matrix, policy authoring, SSRF, LLM judge, audit log, policy-builder, troubleshooting, v1 limits
 
 ## Key Files
 
