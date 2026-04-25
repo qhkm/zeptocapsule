@@ -98,6 +98,24 @@ impl CapsuleSpec {
             }
         }
 
+        // Egress policy is currently only enforced by the Process backend.
+        // The Namespace and Firecracker backends need veth + iptables (or
+        // vsock-routed) plumbing that's tracked as a follow-up. Refusing
+        // creation here is the safer default — better to fail loudly than
+        // to ship an unenforced policy.
+        if self.egress.is_some()
+            && matches!(
+                self.isolation,
+                Isolation::Namespace | Isolation::Firecracker
+            )
+        {
+            return Err(format!(
+                "egress policy is not yet enforced for {:?} isolation; \
+                 only Process backend supports egress in v1",
+                self.isolation
+            ));
+        }
+
         Ok(())
     }
 }
@@ -504,5 +522,49 @@ mod tests {
     fn capsule_report_default_has_empty_egress_log() {
         let report = CapsuleReport::default();
         assert!(report.egress_log.is_empty());
+    }
+
+    #[test]
+    fn validate_rejects_egress_on_namespace_backend() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Namespace,
+            security: SecurityProfile::Standard,
+            egress: Some(crate::egress::EgressPolicy::deny_all()),
+            ..Default::default()
+        };
+        let err = spec.validate().unwrap_err();
+        assert!(err.contains("egress"), "error should mention egress: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_egress_on_firecracker_backend() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Firecracker,
+            security: SecurityProfile::Standard,
+            egress: Some(crate::egress::EgressPolicy::deny_all()),
+            firecracker: Some(FirecrackerConfig {
+                firecracker_bin: PathBuf::from("/usr/bin/firecracker"),
+                kernel_path: PathBuf::from("/var/lib/zk/vmlinux"),
+                rootfs_path: PathBuf::from("/var/lib/zk/rootfs.ext4"),
+                vcpus: None,
+                memory_mib: None,
+                enable_network: false,
+                tap_name: None,
+            }),
+            ..Default::default()
+        };
+        let err = spec.validate().unwrap_err();
+        assert!(err.contains("egress"), "error should mention egress: {err}");
+    }
+
+    #[test]
+    fn validate_accepts_egress_on_process_backend() {
+        let spec = CapsuleSpec {
+            isolation: Isolation::Process,
+            security: SecurityProfile::Dev,
+            egress: Some(crate::egress::EgressPolicy::allow_all()),
+            ..Default::default()
+        };
+        assert!(spec.validate().is_ok());
     }
 }
