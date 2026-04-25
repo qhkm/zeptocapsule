@@ -19,7 +19,7 @@ pub enum EgressAction {
 ///
 /// Stored as a typed enum (not a string) so policy authors get compile-time
 /// safety in Rust callers. Wire format is `UPPERCASE`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Method {
     Get,
@@ -184,16 +184,41 @@ impl EgressPolicy {
 }
 
 /// One audit-log entry: a single evaluated request and its outcome.
-#[derive(Debug, Clone)]
+///
+/// Serializes timestamps as Unix-epoch microseconds so the log is portable
+/// across hosts and replayable into the policy-builder tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EgressDecision {
+    #[serde(with = "epoch_us")]
     pub ts: SystemTime,
     pub method: Method,
     /// `host + path`. Query string and body intentionally omitted (PII risk).
     pub url: String,
     pub decision: EgressAction,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub matched_rule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge_reason: Option<String>,
     pub latency_us: u64,
+}
+
+mod epoch_us {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(t: &SystemTime, s: S) -> Result<S::Ok, S::Error> {
+        let micros = t
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0);
+        s.serialize_u64(micros)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SystemTime, D::Error> {
+        let micros = u64::deserialize(d)?;
+        Ok(UNIX_EPOCH + Duration::from_micros(micros))
+    }
 }
 
 #[cfg(test)]
