@@ -7,6 +7,8 @@
 //! Design: `docs/plans/2026-04-25-network-egress-policy-design.md`.
 //! Reference impl studied: <https://github.com/brexhq/CrabTrap>.
 
+pub mod ca;
+pub mod proxy;
 pub mod rules;
 pub mod ssrf;
 pub mod types;
