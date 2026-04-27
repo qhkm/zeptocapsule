@@ -94,10 +94,10 @@ impl NamespaceCapsule {
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(timeout_sec)) => {
                     let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
-                    if let Ok(mut locked) = state.lock() {
-                        if locked.killed_by.is_none() {
-                            locked.killed_by = Some(ResourceViolation::WallClock);
-                        }
+                    if let Ok(mut locked) = state.lock()
+                        && locked.killed_by.is_none()
+                    {
+                        locked.killed_by = Some(ResourceViolation::WallClock);
                     }
                 }
                 _ = rx => {}
@@ -412,18 +412,17 @@ fn do_clone(
     // we let the child run. If this fails, the capsule has no working
     // network and we'd rather kill the child than start it with a broken
     // network configuration.
-    if let Some(setup) = egress_veth.as_ref() {
-        if let Err(error) = netns::move_guest_into_netns(setup, child_pid.as_raw()) {
-            unsafe { libc::write(sync_w, [1_u8].as_ptr().cast(), 1) };
-            let _ = nix::unistd::close(sync_w);
-            let _ = nix::unistd::close(diag_r);
-            let _ = nix::sys::signal::kill(child_pid, nix::sys::signal::Signal::SIGKILL);
-            let _ = waitpid(child_pid, None);
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("egress netns setup failed: {error}"),
-            ));
-        }
+    if let Some(setup) = egress_veth.as_ref()
+        && let Err(error) = netns::move_guest_into_netns(setup, child_pid.as_raw())
+    {
+        unsafe { libc::write(sync_w, [1_u8].as_ptr().cast(), 1) };
+        let _ = nix::unistd::close(sync_w);
+        let _ = nix::unistd::close(diag_r);
+        let _ = nix::sys::signal::kill(child_pid, nix::sys::signal::Signal::SIGKILL);
+        let _ = waitpid(child_pid, None);
+        return Err(std::io::Error::other(format!(
+            "egress netns setup failed: {error}"
+        )));
     }
 
     let capsule_id = format!(
@@ -448,10 +447,9 @@ fn do_clone(
                 let _ = nix::unistd::close(diag_r);
                 let _ = nix::sys::signal::kill(child_pid, nix::sys::signal::Signal::SIGKILL);
                 let _ = waitpid(child_pid, None);
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("cgroup setup required but failed: {error}"),
-                ));
+                return Err(std::io::Error::other(format!(
+                    "cgroup setup required but failed: {error}"
+                )));
             }
             tracing::warn!("cgroup setup failed for {}: {}", capsule_id, error);
             Cgroup::dummy()
@@ -504,6 +502,7 @@ fn child_bail(diag_fd: RawFd, msg: &str) -> isize {
     -1
 }
 
+#[allow(clippy::too_many_arguments)] // post-clone child entry; refactor would obscure the fork boundary
 fn child_main(
     init_binary: &PathBuf,
     worker_binary: &str,

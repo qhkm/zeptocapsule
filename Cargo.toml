@@ -15,9 +15,14 @@ serde_json = "1"
 globset = "0.4"
 ipnet = "2"
 httparse = "1"
-rustls = "0.23"
-tokio-rustls = "0.26"
-rcgen = { version = "0.13", default-features = false, features = ["pem", "crypto", "aws_lc_rs"] }
+# rustls + rcgen pinned to the `ring` crypto provider rather than the
+# default `aws-lc-rs`. aws-lc-sys's bundled C code references glibc 2.38
+# `__isoc23_*` symbols that aren't present on Ubuntu 22.04 (glibc 2.35),
+# breaking CI builds. `ring` is pure-Rust assembly and links cleanly on
+# any glibc version we care about.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+rcgen = { version = "0.13", default-features = false, features = ["pem", "crypto", "ring"] }
 webpki-roots = "1"
 time = { version = "0.3", default-features = false, features = ["std"] }
 

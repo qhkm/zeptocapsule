@@ -354,15 +354,15 @@ enum ControlStatus {
 }
 
 fn parse_exit_status(line: &str) -> ControlStatus {
-    if let Some(value) = line.trim().strip_prefix("EXIT ") {
-        if let Ok(code) = value.trim().parse::<i32>() {
-            return ControlStatus::Exited(code);
-        }
+    if let Some(value) = line.trim().strip_prefix("EXIT ")
+        && let Ok(code) = value.trim().parse::<i32>()
+    {
+        return ControlStatus::Exited(code);
     }
-    if let Some(value) = line.trim().strip_prefix("SIGNAL ") {
-        if let Ok(signal) = value.trim().parse::<i32>() {
-            return ControlStatus::Signaled(signal);
-        }
+    if let Some(value) = line.trim().strip_prefix("SIGNAL ")
+        && let Ok(signal) = value.trim().parse::<i32>()
+    {
+        return ControlStatus::Signaled(signal);
     }
     ControlStatus::Unknown
 }
@@ -599,15 +599,13 @@ impl CapsuleHandle for FirecrackerCapsule {
                     )
                     .await?;
 
-                    if enable_network {
-                        if let Some(ref tap) = tap_name {
-                            api::put_expect_ok(
-                                &api_sock,
-                                "/network-interfaces/eth0",
-                                &api::network_interface_json("eth0", tap),
-                            )
-                            .await?;
-                        }
+                    if enable_network && let Some(ref tap) = tap_name {
+                        api::put_expect_ok(
+                            &api_sock,
+                            "/network-interfaces/eth0",
+                            &api::network_interface_json("eth0", tap),
+                        )
+                        .await?;
                     }
 
                     api::put_expect_ok(&api_sock, "/actions", &api::action_json("InstanceStart"))

@@ -39,7 +39,10 @@ jobs:
       - name: Build tests
         run: cargo build --tests
       - name: Run namespace integration tests
-        run: sudo env ZK_RUN_NAMESPACE_TESTS=1 $(which cargo) test --test namespace_backend -- --test-threads=1 --nocapture
+        # `sudo $(which cargo)` resolves to the rustup shim, which can't pick a
+        # toolchain when HOME flips to /root. `rustup which cargo` returns the
+        # actual binary in the toolchain dir, bypassing the shim.
+        run: sudo env ZK_RUN_NAMESPACE_TESTS=1 $(rustup which cargo) test --test namespace_backend -- --test-threads=1 --nocapture
 
   # Process backend integration tests (no root needed)
   process-tests:
