@@ -36,13 +36,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build tests
-        run: cargo build --tests
+      - name: Build test binary
+        run: cargo test --test namespace_backend --no-run
       - name: Run namespace integration tests
-        # `sudo $(which cargo)` resolves to the rustup shim, which can't pick a
-        # toolchain when HOME flips to /root. `rustup which cargo` returns the
-        # actual binary in the toolchain dir, bypassing the shim.
-        run: sudo env ZK_RUN_NAMESPACE_TESTS=1 $(rustup which cargo) test --test namespace_backend -- --test-threads=1 --nocapture
+        # Avoid cargo-under-sudo: cargo invokes `rustc` which is also a rustup
+        # shim, and shims can't pick a toolchain when sudo flips HOME to /root.
+        # Compile first (above), then run the test binary directly under sudo.
+        run: |
+          binary=$(find target/debug/deps -maxdepth 1 -name 'namespace_backend-*' -type f -executable | head -n1)
+          if [ -z "$binary" ]; then
+            echo "namespace_backend test binary not found" >&2
+            ls -la target/debug/deps/ >&2
+            exit 1
+          fi
+          echo "Running $binary"
+          sudo ZK_RUN_NAMESPACE_TESTS=1 "$binary" --test-threads=1 --nocapture
 
   # Process backend integration tests (no root needed)
   process-tests:
